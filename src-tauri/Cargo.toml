@@ -31,3 +31,7 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
+
+[target."cfg(windows)".dependencies]
+webview2-com = "0.39.1"
+windows-core = "0.62.2"

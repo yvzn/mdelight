@@ -12,7 +12,7 @@ use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 use serde::Serialize;
 use tauri::ipc::Channel;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_HITS: usize = 5000;
@@ -420,9 +420,45 @@ pub fn run() {
             search_content,
             render_markdown
         ])
+        .on_window_event(|window, event| {
+            // Minimizing fires a resize (to 0×0 on Windows), restoring fires another.
+            if let tauri::WindowEvent::Resized(_) = event {
+                let minimized = window.is_minimized().unwrap_or(false);
+                if let Some(webview) = window.app_handle().get_webview_window(window.label()) {
+                    set_low_memory(&webview, minimized);
+                }
+            }
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
+// ---------------------------------------------------------------- memory
+
+/// Ask WebView2 to trim caches and page memory while the window is minimized, and
+/// to return to normal when it comes back. Only called on state changes.
+#[cfg(windows)]
+fn set_low_memory(webview: &tauri::WebviewWindow, low: bool) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        ICoreWebView2_19, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
+    };
+    use windows_core::Interface;
+
+    static IS_LOW: AtomicBool = AtomicBool::new(false);
+    if IS_LOW.swap(low, Ordering::Relaxed) == low {
+        return;
+    }
+    let level = if low { COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW } else { COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL };
+    let _ = webview.with_webview(move |wv| unsafe {
+        // ICoreWebView2_19 needs WebView2 runtime 114+; older runtimes simply keep the default.
+        if let Ok(core) = wv.controller().CoreWebView2().and_then(|c| c.cast::<ICoreWebView2_19>()) {
+            let _ = core.SetMemoryUsageTargetLevel(level);
+        }
+    });
+}
+
+#[cfg(not(windows))]
+fn set_low_memory(_webview: &tauri::WebviewWindow, _low: bool) {}
 
 #[cfg(test)]
 mod tests {
