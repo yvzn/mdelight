@@ -1,0 +1,972 @@
+/*
+ * Theme: every color is light-dark(<light>, <dark>), resolved by color-scheme.
+ * Default follows Windows; <html data-theme="light|dark"> forces one (see theme.ts).
+ *
+ * Four surface levels: top row a step darker than below, left column a step darker than right.
+ *   1 --bg-bar-side | 2 --bg-bar
+ *   3 --bg-side     | 4 --bg (editor)
+ */
+:root {
+  color-scheme: light dark;
+  --bg-bar-side: light-dark(#dfe2e7, #16181c);
+  --bg-bar: light-dark(#ebedf0, #1d2025);
+  --bg-side: light-dark(#f3f4f6, #21252b);
+  --bg: light-dark(#ffffff, #282c34);
+  /* Translucent so hover reads on every surface level. */
+  --bg-hover: light-dark(rgb(0 0 0 / 0.06), rgb(255 255 255 / 0.06));
+  /* Selection, same hue as the brand blue (208°). Rows sit on the lighter sidebar; the top bars
+     are darker gray, so their selection is a step stronger and labels turn blue to read as "on". */
+  --bg-active: light-dark(#d4e8fc, #20456a);
+  --bg-active-bar: light-dark(#c2ddf7, #1f507a);
+  --fg-active-bar: light-dark(#01559f, #a9d3fa);
+  --fg: light-dark(#1f2328, #d7dae0);
+  --fg-dim: light-dark(#656d76, #8b929e);
+  --border: light-dark(#d8dee4, #181a1f);
+  /* Brand blue #0267C1 and shades. --accent is for text/borders (lighter tint in dark
+     keeps contrast), --accent-fill for filled buttons. */
+  --accent: light-dark(#0267c1, #5aa9ef);
+  --accent-fill: #0267c1;
+  --accent-fill-hover: light-dark(#01559f, #0075c4);
+  --on-accent: #ffffff;
+  --logo-ink: light-dark(#1f2328, #f5f6f8);
+  --mark: light-dark(#ffe58a, #6b5a17);
+  --code-bg: light-dark(#f3f4f6, #2f343e);
+  --danger: light-dark(#cf222e, #ff7b72);
+  --bar-h: 40px;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+body {
+  display: flex;
+  background: var(--bg);
+  color: var(--fg);
+  font: 13px/1.45 "Inter Variable", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  /* cv05: tailed lowercase l, so "l" and "I" differ in file names. */
+  font-feature-settings: "cv05";
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+button:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+input {
+  font: inherit;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  outline: none;
+  min-width: 0;
+}
+input:focus {
+  border-color: var(--accent);
+}
+mark {
+  background: var(--mark);
+  color: inherit;
+  border-radius: 2px;
+}
+[hidden] {
+  display: none !important;
+}
+
+/* ------------------------------------------------------------ sidebar */
+
+#sidebar {
+  width: 280px;
+  min-width: 160px;
+  max-width: 60vw;
+  resize: horizontal;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-side);
+  border-right: 1px solid var(--border);
+}
+body:not(.has-ws) #sidebar,
+body.side-hidden #sidebar {
+  display: none;
+}
+body.side-hidden #toggle-sidebar {
+  color: var(--accent);
+}
+#outline {
+  flex: 1;
+  overflow: auto;
+  padding: 6px 0 20px;
+}
+#outline .row {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+  line-height: 28px;
+}
+#outline .row.h1 {
+  font-weight: 600;
+}
+#outline .empty {
+  padding: 8px 12px;
+  color: var(--fg-dim);
+}
+/* Files panel header: workspace menu + "New" action, next to what they act on. */
+.files-head {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 6px 4px 4px;
+}
+.files-head .ws-name {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  padding: 3px 6px;
+}
+.files-head .caret {
+  font-size: 10px;
+}
+.new-btn {
+  flex: none;
+  font-size: 12px;
+  border-color: var(--border);
+}
+/* Drop-down menus (folder menu, theme menu). */
+.menu {
+  position: absolute;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.2);
+}
+.menu button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+  border-radius: 4px;
+}
+.menu button:focus-visible {
+  outline: 2px solid var(--accent);
+}
+.menu .dir {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+.menu .sep {
+  margin: 6px 8px 2px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-dim);
+}
+#ws-menu {
+  top: 100%;
+  left: 6px;
+  right: 6px;
+}
+#ws-menu button:first-child {
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
+  align-self: stretch;
+}
+
+/* Theme switch: right end of the toolbar, after the view modes. */
+.tb-sep {
+  width: 1px;
+  height: 20px;
+  background: var(--border);
+}
+.menu-anchor {
+  position: relative;
+  display: flex;
+}
+#theme-btn {
+  display: flex;
+  padding: 4px 6px;
+  color: var(--fg-dim);
+}
+#theme-btn svg,
+#theme-menu svg {
+  width: 16px;
+  height: 16px;
+}
+#theme-menu {
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 200px;
+}
+#theme-menu button {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+}
+#theme-menu .check {
+  margin-left: auto;
+  color: var(--accent);
+  visibility: hidden;
+}
+#theme-menu button[aria-checked="true"] .check {
+  visibility: visible;
+}
+
+#toggle-sidebar {
+  display: flex;
+  padding: 4px 6px;
+  color: var(--fg-dim);
+}
+
+/* Click-to-rename title (Google Docs convention). */
+#doc-title.editable {
+  padding: 2px 6px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: text;
+}
+#doc-title.editable:hover {
+  border-color: var(--border);
+  color: var(--fg);
+}
+#doc-title:has(input) {
+  flex: 1;
+  max-width: 600px;
+  padding: 0;
+}
+.rename-input {
+  width: 100%;
+}
+.side-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  /* Same height as #toolbar so both bottom borders form one line. */
+  height: var(--bar-h);
+  flex: none;
+  padding: 0 6px;
+  background: var(--bg-bar-side);
+  border-bottom: 1px solid var(--border);
+}
+.side-tabs button.active,
+.modes button.active {
+  background: var(--bg-active-bar);
+  color: var(--fg-active-bar);
+}
+.panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.ws-name {
+  padding: 6px 10px 4px;
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#tree {
+  flex: 1;
+  overflow: auto;
+  padding-bottom: 20px;
+}
+.row {
+  display: flex;
+  align-items: center;
+  height: 28px;
+  padding-right: 8px;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+.row:hover {
+  background: var(--bg-hover);
+}
+.row.active {
+  background: var(--bg-active);
+}
+.row .tw {
+  width: 14px;
+  flex: none;
+  color: var(--fg-dim);
+  font-size: 10px;
+}
+.row.dir .tw::before {
+  content: "▸";
+}
+.row.dir.open .tw::before {
+  content: "▾";
+}
+.row .label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.row.file:not(.md) .label {
+  color: var(--fg-dim);
+}
+
+.search-box {
+  display: flex;
+  gap: 2px;
+  padding: 8px 6px 4px;
+}
+.search-box input {
+  flex: 1;
+}
+.toggle.on {
+  background: var(--bg-active);
+  border-color: var(--accent);
+}
+#search-status {
+  padding: 2px 10px 6px;
+  color: var(--fg-dim);
+  font-size: 12px;
+}
+#search-results {
+  flex: 1;
+  overflow: auto;
+  font-size: 12.5px;
+}
+.group .ghead {
+  display: flex;
+  padding: 6px 8px 4px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.group .ghead:hover {
+  background: var(--bg-hover);
+}
+.group .count {
+  margin-left: auto;
+  padding-left: 8px;
+  color: var(--fg-dim);
+  font-weight: normal;
+}
+.group.collapsed .hit {
+  display: none;
+}
+.hit {
+  padding: 4px 8px 4px 20px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+.hit:hover {
+  background: var(--bg-hover);
+}
+.hit.sel {
+  background: var(--bg-active);
+}
+.hit .ln {
+  display: inline-block;
+  min-width: 36px;
+  color: var(--fg-dim);
+}
+
+/* ------------------------------------------------------------ main */
+
+main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+#toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--bar-h);
+  flex: none;
+  padding: 0 8px 0 12px;
+  background: var(--bg-bar);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+#doc-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--fg-dim);
+}
+#doc-state {
+  color: var(--accent);
+}
+.modes {
+  margin-left: auto;
+  display: flex;
+  gap: 2px;
+}
+body:not(.has-ws) #toolbar,
+body:not(.has-ws) #panes {
+  display: none;
+}
+
+#panes {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+#editor,
+#preview {
+  flex: 1 1 50%;
+  min-width: 0;
+}
+#editor {
+  display: flex;
+}
+#editor .cm-editor {
+  flex: 1;
+  height: 100%;
+}
+#editor .cm-scroller {
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 13.5px;
+}
+#editor .cm-editor.cm-focused {
+  outline: none;
+}
+#panes[data-mode="split"] #editor {
+  border-right: 1px solid var(--border);
+}
+#panes[data-mode="code"] #preview,
+#panes[data-mode="preview"] #editor {
+  display: none;
+}
+
+#welcome {
+  margin: auto;
+  text-align: center;
+  color: var(--fg-dim);
+}
+#welcome .logo {
+  width: 120px;
+  height: auto;
+}
+#welcome .logo-hash {
+  fill: var(--logo-ink);
+}
+#welcome h1 {
+  margin-top: 8px;
+  font-weight: 300;
+  font-size: 40px;
+  color: var(--fg);
+}
+#welcome button {
+  font-size: 15px;
+  padding: 8px 18px;
+  background: var(--accent-fill);
+  color: var(--on-accent);
+}
+#welcome button:hover {
+  background: var(--accent-fill-hover);
+}
+body.has-ws #welcome {
+  display: none;
+}
+kbd {
+  font: 11px "Cascadia Mono", Consolas, monospace;
+  padding: 1px 4px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+
+/* ------------------------------------------------------------ palette & toast */
+
+#palette {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  justify-content: center;
+  padding-top: 10vh;
+  background: rgb(0 0 0 / 0.15);
+  z-index: 10;
+}
+.palette-box {
+  width: min(640px, 90vw);
+  max-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 12px 40px rgb(0 0 0 / 0.3);
+  overflow: hidden;
+  align-self: flex-start;
+}
+#palette-input {
+  margin: 8px;
+  padding: 7px 10px;
+  font-size: 14px;
+}
+#palette-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 6px;
+  overflow: auto;
+}
+#palette-list li {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 7px 14px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+#palette-list li.sel {
+  background: var(--bg-active);
+}
+#palette-list .dir {
+  color: var(--fg-dim);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#palette-list .empty {
+  color: var(--fg-dim);
+}
+#help {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 8vh 16px 16px;
+  background: rgb(0 0 0 / 0.25);
+  z-index: 15;
+}
+.help-box {
+  width: min(820px, 100%);
+  max-height: 84vh;
+  overflow: auto;
+  padding: 16px 24px 20px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 12px 40px rgb(0 0 0 / 0.3);
+  outline: none;
+}
+.help-box header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.help-box h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+}
+.help-cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 0 32px;
+}
+.help-box h3 {
+  margin: 18px 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg-dim);
+}
+.help-box dl {
+  display: grid;
+  /* Shared key-column width so descriptions line up across groups. */
+  grid-template-columns: minmax(13em, max-content) 1fr;
+  gap: 5px 16px;
+  margin: 0;
+}
+.help-box dt {
+  white-space: nowrap;
+  color: var(--fg-dim);
+}
+.help-box dd {
+  margin: 0;
+}
+.help-box kbd {
+  color: var(--fg);
+  background: var(--bg-side);
+}
+
+#toast {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  max-width: 60vw;
+  padding: 8px 14px;
+  background: var(--fg);
+  color: var(--bg);
+  border-radius: 6px;
+  z-index: 20;
+}
+
+/* ------------------------------------------------------------ rendered markdown */
+
+/*
+ * Prose sits in a centered "text" column sized for ~50–65 characters per line.
+ * Tables, diagrams, standalone images and code blocks use the "wide" column and
+ * grow up to the full pane width when their content needs it.
+ */
+.markdown-body {
+  /* 31.5em of 15px Segoe UI: lines measured at 61–73 characters (avg 68), max 75. */
+  --measure: 31.5em;
+  overflow: auto;
+  display: grid;
+  grid-template-columns:
+    [full-start] 24px [wide-start] minmax(0, 1fr) [text-start] minmax(0, var(--measure))
+    [text-end] minmax(0, 1fr) [wide-end] 24px [full-end];
+  align-content: start;
+  /* Without this, Chromium sizes rows holding a scrolling table wrapper to zero height. */
+  grid-auto-rows: max-content;
+  padding: 24px 0 40vh;
+  font: 15px/1.6 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  word-wrap: break-word;
+}
+.markdown-body > * {
+  grid-column: text;
+  min-width: 0;
+  /* Grid items don't collapse margins: space blocks with a bottom margin only. */
+  margin-top: 0;
+  margin-bottom: 1em;
+}
+.markdown-body > :is(.table-wrap, .mermaid, pre, p.figure) {
+  grid-column: wide;
+  justify-self: center;
+  max-width: 100%;
+}
+/* Wide blocks start at the text width so their edges line up with the prose. */
+.markdown-body > :is(pre, .mermaid) {
+  min-width: min(100%, var(--measure));
+}
+.markdown-body > :first-child {
+  margin-top: 0;
+}
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+  margin: 1.4em 0 0.6em;
+  font-weight: 600;
+  line-height: 1.25;
+}
+.markdown-body h1 {
+  font-size: 2em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--border);
+}
+.markdown-body h2 {
+  font-size: 1.5em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--border);
+}
+.markdown-body h3 {
+  font-size: 1.25em;
+}
+.markdown-body a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.markdown-body a:hover {
+  text-decoration: underline;
+}
+.markdown-body a.anchor {
+  display: none;
+}
+.markdown-body code {
+  font: 0.88em "Cascadia Mono", Consolas, monospace;
+  background: var(--code-bg);
+  padding: 0.15em 0.35em;
+  border-radius: 4px;
+}
+.markdown-body pre {
+  background: var(--code-bg);
+  padding: 12px 16px;
+  border-radius: 6px;
+  overflow: auto;
+  line-height: 1.45;
+}
+.markdown-body pre code {
+  background: none;
+  padding: 0;
+}
+/* Hover tools on wide blocks: fullscreen (⛶) and, for code/diagrams, Copy. */
+.markdown-body :is(pre, .mermaid, .table-wrap, p.figure) {
+  position: relative;
+}
+.markdown-body .tools {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+.markdown-body .tools button {
+  padding: 2px 8px;
+  font: 12px "Inter Variable", "Segoe UI", system-ui, sans-serif;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+.markdown-body :is(pre, .mermaid, .table-wrap, p.figure):hover > .tools,
+.markdown-body .tools:focus-within,
+.markdown-body .tools:has(.done) {
+  opacity: 1;
+}
+.markdown-body button.copy.done {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.markdown-body :is(.mermaid, p.figure) {
+  cursor: zoom-in;
+}
+
+/* Syntax colors for preview code blocks (lezer classHighlighter). */
+:root {
+  --tok-keyword: light-dark(#cf222e, #c678dd);
+  --tok-string: light-dark(#0a3069, #98c379);
+  --tok-number: light-dark(#0550ae, #d19a66);
+  --tok-comment: light-dark(#6e7781, #7f848e);
+  --tok-type: light-dark(#953800, #e5c07b);
+  --tok-def: light-dark(#8250df, #61afef);
+  --tok-prop: light-dark(#0550ae, #e06c75);
+  --tok-meta: light-dark(#6e7781, #56b6c2);
+}
+.tok-keyword,
+.tok-operator.tok-keyword {
+  color: var(--tok-keyword);
+}
+.tok-string,
+.tok-string2,
+.tok-url,
+.tok-inserted {
+  color: var(--tok-string);
+}
+.tok-number,
+.tok-bool,
+.tok-atom,
+.tok-literal {
+  color: var(--tok-number);
+}
+.tok-comment {
+  color: var(--tok-comment);
+  font-style: italic;
+}
+.tok-typeName,
+.tok-className,
+.tok-namespace {
+  color: var(--tok-type);
+}
+.tok-definition,
+.tok-macroName,
+.tok-labelName {
+  color: var(--tok-def);
+}
+.tok-propertyName {
+  color: var(--tok-prop);
+}
+.tok-meta {
+  color: var(--tok-meta);
+}
+.tok-deleted,
+.tok-invalid {
+  color: var(--danger);
+}
+.tok-heading,
+.tok-strong {
+  font-weight: 600;
+}
+.tok-emphasis {
+  font-style: italic;
+}
+.markdown-body blockquote {
+  margin: 0 0 1em;
+  padding: 0 1em;
+  color: var(--fg-dim);
+  border-left: 4px solid var(--border);
+}
+.markdown-body table {
+  border-collapse: collapse;
+  margin: 0 0 1em;
+}
+/* Top-level tables are wrapped: the wrapper scrolls when even the full pane is too narrow. */
+.markdown-body .table-wrap {
+  overflow-x: auto;
+}
+.markdown-body .table-wrap > table {
+  margin: 0;
+}
+/* Headers stay on one line; wide tables scroll (or open fullscreen) instead of squashing. */
+.markdown-body th {
+  white-space: nowrap;
+}
+.markdown-body p.figure {
+  text-align: center;
+}
+.markdown-body th,
+.markdown-body td {
+  border: 1px solid var(--border);
+  padding: 5px 12px;
+}
+.markdown-body tr:nth-child(2n) {
+  background: var(--bg-side);
+}
+.markdown-body img {
+  max-width: 100%;
+}
+.markdown-body hr {
+  border: 0;
+  height: 2px;
+  background: var(--border);
+}
+.markdown-body li.task-list-item,
+.markdown-body ul:has(> li > input[type="checkbox"]) {
+  list-style: none;
+}
+.markdown-body .mermaid {
+  margin: 0 0 1em;
+  text-align: center;
+  position: relative;
+}
+.markdown-body .mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+.markdown-body .mermaid.pending:not(:has(svg)) {
+  white-space: pre;
+  text-align: left;
+  font: 12px "Cascadia Mono", Consolas, monospace;
+  color: var(--fg-dim);
+}
+.markdown-body .mermaid.has-error::after {
+  content: attr(data-error);
+  position: absolute;
+  top: 0;
+  right: 0;
+  max-width: 60%;
+  padding: 2px 6px;
+  font-size: 11px;
+  background: var(--danger);
+  color: #fff;
+  border-radius: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mermaid-error {
+  color: var(--danger);
+  text-align: left;
+  white-space: pre-wrap;
+}
+
+/* ------------------------------------------------------------ fullscreen viewer */
+
+#lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+#lightbox header {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  height: var(--bar-h);
+  flex: none;
+  padding: 0 8px 0 16px;
+  background: var(--bg-bar);
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-dim);
+}
+#lightbox header .hint {
+  margin-right: auto;
+  font-size: 12px;
+}
+#lightbox .lb-body {
+  flex: 1;
+  display: flex;
+  padding: 24px;
+  overflow: auto;
+}
+/* Content is centered when it fits, scrolls from the top-left when it doesn't. */
+#lightbox .lb-body > * {
+  margin: auto;
+  max-width: none;
+}
+#lightbox .tools {
+  display: none;
+}
+#lightbox :is(.mermaid, p.figure) {
+  cursor: default;
+}
+/* Diagrams and images scale up to fill the window, keeping their proportions. */
+#lightbox .mermaid {
+  width: 100%;
+  height: 100%;
+}
+#lightbox .mermaid svg {
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+}
+#lightbox p.figure {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+#lightbox p.figure img {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  object-fit: contain;
+}
+#lightbox pre {
+  min-width: min(100%, 60em);
+}
