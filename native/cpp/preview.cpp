@@ -466,6 +466,29 @@ public:
 		text = narrow(w);
 	}
 
+	/// litehtml only wraps at spaces (no overflow-wrap): let long words like bare URLs also wrap
+	/// after their punctuation, by splitting them into adjacent words with no space between.
+	void split_text(const char* text, const std::function<void(const char*)>& on_word,
+		const std::function<void(const char*)>& on_space) override {
+		auto split_long = [&](const char* word) {
+			const char* breaks = "/?&=#.-_";
+			size_t n = strlen(word);
+			if (n <= 24)
+				return on_word(word);
+			std::string piece;
+			for (size_t i = 0; i < n; i++) {
+				piece += word[i];
+				if (strchr(breaks, word[i]) && i + 1 < n && !strchr(breaks, word[i + 1])) {
+					on_word(piece.c_str());
+					piece.clear();
+				}
+			}
+			if (!piece.empty())
+				on_word(piece.c_str());
+		};
+		document_container::split_text(text, split_long, on_space);
+	}
+
 	void import_css(string&, const string&, string&) override {}
 
 	void set_clip(const position& pos, const border_radiuses&) override {
@@ -669,7 +692,10 @@ static std::wstring selected_text(Preview* p) {
 	float prev_bottom = -1, prev_top = -1;
 	for (int i = std::max(0, a); i < std::min(b, (int)items.size()); i++) {
 		const auto& it = items[i];
-		if (prev_top >= 0 && it.box.y >= prev_bottom - 1) {
+		// A word split across lines (a wrapped URL) shares its parent with the piece before it.
+		bool same_word = i > std::max(0, a) &&!it.el->is_white_space() && !items[i - 1].el->is_white_space() &&
+			it.el->parent() == items[i - 1].el->parent();
+		if (prev_top >= 0 && it.box.y >= prev_bottom - 1 && !same_word) {
 			while (!out.empty() && out.back() == ' ')
 				out.pop_back();
 			out += "\r\n";
