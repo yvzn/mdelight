@@ -7,6 +7,7 @@ use windows_sys::Win32::Foundation::HWND;
 pub const PVN_SCROLL: u32 = 0x8000 + 0x100;
 pub const PVN_LINK: u32 = 0x8000 + 0x101;
 pub const PVN_TOAST: u32 = 0x8000 + 0x102;
+pub const PVN_MERMAID: u32 = 0x8000 + 0x103;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]

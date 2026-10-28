@@ -8,6 +8,7 @@ mod crash;
 mod ffi;
 mod findbar;
 mod markdown;
+mod mermaid;
 mod palette;
 mod panels;
 mod sci;

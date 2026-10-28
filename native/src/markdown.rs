@@ -298,6 +298,13 @@ mod tests {
     }
 
     #[test]
+    fn mermaid_blocks_keep_their_language_class() {
+        // cpp/preview.cpp finds diagrams by this class for the View button.
+        let html = render("```mermaid\ngraph TD\n  A-->B\n```\n", false);
+        assert!(html.contains("<code class=\"language-mermaid\""), "{html}");
+    }
+
+    #[test]
     fn outline_skips_code_and_front_matter() {
         let doc = "---\ntitle: x\n---\n# One\n\n```\n# not\n```\nTwo\n---\n## *Three*\n";
         let hs = headings(doc);
