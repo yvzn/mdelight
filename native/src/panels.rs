@@ -9,8 +9,8 @@ use windows_sys::Win32::UI::Controls::*;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{SetFocus, VK_RETURN};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
-use crate::app::{is_markdown, make_edit, App, Fonts, Mode, ID_FILES_TREE, ID_OUTLINE_TREE, ID_SEARCH_EDIT, ID_SEARCH_TREE, WM_SEARCH};
-use crate::core::SearchEvent;
+use crate::app::{is_markdown, make_edit, App, Fonts, Mode, ID_FILES_TREE, ID_OUTLINE_TREE, ID_SEARCH_EDIT, ID_SEARCH_TREE, T_SEARCH_FLUSH, WM_SEARCH};
+use crate::core::{LineHit, SearchEvent};
 use crate::markdown::Heading;
 use crate::theme::{self, Palette};
 use crate::win::*;
@@ -239,6 +239,9 @@ pub struct SearchPanel {
     pub regex: bool,
     pub status: String,
     hits: Vec<(String, usize)>,
+    /// Results received since the last flush into the tree (one redraw per batch).
+    pending: Vec<(String, Vec<LineHit>)>,
+    flush_armed: bool,
 }
 
 impl SearchPanel {
@@ -250,6 +253,8 @@ impl SearchPanel {
             regex: false,
             status: String::new(),
             hits: Vec::new(),
+            pending: Vec::new(),
+            flush_armed: false,
         }
     }
 
@@ -424,10 +429,31 @@ impl App {
         }
     }
 
-    pub fn run_search(&mut self) {
+    /// Search as you type (after the debounce): one-character queries match nearly every
+    /// line, so they wait for Enter instead.
+    pub fn run_search_typed(&mut self) {
         let query = get_text(self.search.edit);
+        if query.chars().count() == 1 && !self.search.regex {
+            let _ = self.core.search("", false, false, |_| {}); // cancel any running search
+            self.reset_results();
+            self.search.status = "Type 2+ characters, or press Enter".into();
+            self.invalidate();
+            return;
+        }
+        self.run_search();
+    }
+
+    fn reset_results(&mut self) {
         clear(self.search.tree);
         self.search.hits.clear();
+        self.search.pending.clear();
+        self.search.flush_armed = false;
+        unsafe { KillTimer(self.hwnd, T_SEARCH_FLUSH) };
+    }
+
+    pub fn run_search(&mut self) {
+        let query = get_text(self.search.edit);
+        self.reset_results();
         self.search.status = if query.is_empty() { String::new() } else { "Searching…".into() };
         let hwnd = self.hwnd as usize;
         let res = self.core.search(&query, self.search.regex, self.search.case, move |ev| unsafe {
@@ -439,19 +465,40 @@ impl App {
         self.invalidate();
     }
 
+    pub fn flush_search_results(&mut self) {
+        unsafe { KillTimer(self.hwnd, T_SEARCH_FLUSH) };
+        self.search.flush_armed = false;
+        if self.search.pending.is_empty() {
+            return;
+        }
+        let tree = self.search.tree;
+        send(tree, WM_SETREDRAW, 0, 0);
+        for (path, hits) in std::mem::take(&mut self.search.pending) {
+            let group = insert(tree, TVI_ROOT, &format!("{path}   ({})", hits.len()), 0, None);
+            for h in hits {
+                self.search.hits.push((path.clone(), h.line as usize));
+                let text = format!("{}:  {}", h.line, h.text);
+                insert(tree, group, &text, self.search.hits.len() as isize, None);
+            }
+            send(tree, TVM_EXPAND, TVE_EXPAND as usize, group as isize);
+        }
+        send(tree, WM_SETREDRAW, 1, 0);
+        unsafe { InvalidateRect(tree, std::ptr::null(), 1) };
+    }
+
     pub fn on_search_event(&mut self, ev: SearchEvent) {
         let latest = self.core.search_gen();
         match ev {
             SearchEvent::File { gen, path, hits } if gen == latest => {
-                let group = insert(self.search.tree, TVI_ROOT, &format!("{path}   ({})", hits.len()), 0, None);
-                for h in hits {
-                    self.search.hits.push((path.clone(), h.line as usize));
-                    let text = format!("{}:  {}", h.line, h.text);
-                    insert(self.search.tree, group, &text, self.search.hits.len() as isize, None);
+                // Results stream in per file; add them to the tree in batches, one redraw each.
+                self.search.pending.push((path, hits));
+                if !self.search.flush_armed {
+                    self.search.flush_armed = true;
+                    unsafe { SetTimer(self.hwnd, T_SEARCH_FLUSH, 100, None) };
                 }
-                send(self.search.tree, TVM_EXPAND, TVE_EXPAND as usize, group as isize);
             }
             SearchEvent::Done { gen, files, hits, ms, truncated } if gen == latest => {
+                self.flush_search_results();
                 let s = |n: usize| if n == 1 { "" } else { "s" };
                 self.search.status = format!("{hits} result{} in {files} file{} · {ms} ms{}", s(hits), s(files), if truncated { " (truncated)" } else { "" });
                 self.invalidate();

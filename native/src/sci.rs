@@ -80,6 +80,8 @@ pub const SCI_GETFOCUS: u32 = 2381;
 pub const SCI_GRABFOCUS: u32 = 2400;
 pub const SCI_SETYCARETPOLICY: u32 = 2403;
 pub const SCI_LINEDUPLICATE: u32 = 2404;
+pub const SCI_LINEDOWNRECTEXTEND: u32 = 2426;
+pub const SCI_LINEUPRECTEXTEND: u32 = 2427;
 pub const SCI_SETWRAPINDENTMODE: u32 = 2472;
 pub const SCI_SETSCROLLWIDTHTRACKING: u32 = 2516;
 pub const SCI_GETCHARACTERPOINTER: u32 = 2520;
@@ -193,13 +195,15 @@ impl Editor {
         self.msg(SCI_SETMODEVENTMASK, (SC_MOD_INSERTTEXT | SC_MOD_DELETETEXT) as usize, 0);
         self.msg(SCI_SETILEXER, 0, unsafe { ffi::md_create_lexer() } as isize);
 
-        // Keys from the webview build's help: Alt+↑/↓ move lines, Shift+Alt+↑/↓ duplicate,
-        // Ctrl+Shift+K delete line. Ctrl+D (select next) and the rest are handled by the app.
+        // Keys from the webview build's help: Alt+↑/↓ move lines, Ctrl+Shift+D duplicate,
+        // Ctrl+Shift+K delete line. Alt+Shift+arrows stay column selection, as in Notepad++.
+        // Ctrl+D (select next) and the rest are handled by the app.
         let key = |k: usize, m: usize| k | (m << 16);
         self.msg(SCI_ASSIGNCMDKEY, key(SCK_UP, SCMOD_ALT), SCI_MOVESELECTEDLINESUP as isize);
         self.msg(SCI_ASSIGNCMDKEY, key(SCK_DOWN, SCMOD_ALT), SCI_MOVESELECTEDLINESDOWN as isize);
-        self.msg(SCI_ASSIGNCMDKEY, key(SCK_UP, SCMOD_ALT | SCMOD_SHIFT), SCI_LINEDUPLICATE as isize);
-        self.msg(SCI_ASSIGNCMDKEY, key(SCK_DOWN, SCMOD_ALT | SCMOD_SHIFT), SCI_LINEDUPLICATE as isize);
+        self.msg(SCI_ASSIGNCMDKEY, key('D' as usize, SCMOD_CTRL | SCMOD_SHIFT), SCI_LINEDUPLICATE as isize);
+        self.msg(SCI_ASSIGNCMDKEY, key(SCK_UP, SCMOD_ALT | SCMOD_SHIFT), SCI_LINEUPRECTEXTEND as isize);
+        self.msg(SCI_ASSIGNCMDKEY, key(SCK_DOWN, SCMOD_ALT | SCMOD_SHIFT), SCI_LINEDOWNRECTEXTEND as isize);
         self.msg(SCI_ASSIGNCMDKEY, key('K' as usize, SCMOD_CTRL | SCMOD_SHIFT), SCI_LINEDELETE as isize);
         self.msg(SCI_CLEARCMDKEY, key('D' as usize, SCMOD_CTRL), 0);
     }
