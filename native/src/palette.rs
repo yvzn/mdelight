@@ -1,4 +1,4 @@
-//! One overlay, three uses: quick open (Ctrl+P), go to heading (Ctrl+Shift+O),
+//! One overlay, three uses: quick open (Ctrl+P), go to heading (Ctrl+R),
 //! and a single-line prompt (new file name, go to line).
 
 use windows_sys::Win32::Foundation::*;

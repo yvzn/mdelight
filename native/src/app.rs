@@ -36,6 +36,7 @@ const T_TOAST: usize = 4;
 const T_LOCK: usize = 5;
 pub const T_SEARCH: usize = 6;
 const T_SNAPSHOT: usize = 7;
+pub const T_SEARCH_FLUSH: usize = 8;
 
 pub const ID_SEARCH_EDIT: usize = 101;
 pub const ID_RENAME_EDIT: usize = 102;
@@ -722,7 +723,7 @@ impl App {
         self.hits.push((br, Hit::WelcomeOpen));
         let lines = [
             "Ctrl+P quick open  ·  Ctrl+Shift+F search  ·  Ctrl+1/2/3 code / split / preview",
-            "Ctrl+N new file  ·  F2 rename  ·  Ctrl+B sidebar  ·  Ctrl+Shift+O go to heading",
+            "Ctrl+N new file  ·  F2 rename  ·  Ctrl+B sidebar  ·  Ctrl+R go to heading",
             "F1 all shortcuts",
         ];
         for (i, l) in lines.iter().enumerate() {
@@ -861,7 +862,7 @@ impl App {
         let others: Vec<String> = self.settings.list("recentWorkspaces").into_iter().filter(|p| Some(p.as_str()) != self.root.as_ref().and_then(|r| r.to_str())).collect();
         unsafe {
             let m = CreatePopupMenu();
-            let open = wide("Open folder…\tCtrl+O");
+            let open = wide("Open folder…\tCtrl+Shift+O");
             AppendMenuW(m, MF_STRING, 1, open.as_ptr());
             if !others.is_empty() {
                 AppendMenuW(m, MF_SEPARATOR, 0, std::ptr::null());
@@ -1263,10 +1264,10 @@ impl App {
     }
 
     fn help(&self) {
-        let text = "Files & folders\n  Ctrl+O\tOpen folder\n  Ctrl+N\tNew file\n  F2\tRename / move file\n  Ctrl+S\tSave now (autosave is on)\n\n\
-Navigate\n  Ctrl+P\tGo to file\n  Ctrl+Shift+O\tGo to heading\n  Ctrl+Shift+F\tSearch in all files\n  Ctrl+Shift+E\tShow file list\n\n\
+        let text = "Files & folders\n  Ctrl+Shift+O\tOpen folder\n  Ctrl+N\tNew file\n  F2\tRename / move file\n  Ctrl+S\tSave now (autosave is on)\n\n\
+Navigate\n  Ctrl+P / Ctrl+O\tGo to file\n  Ctrl+R\tGo to heading\n  Ctrl+Shift+F\tSearch in all files\n  Ctrl+Shift+E\tShow file list\n\n\
 View\n  Ctrl+1 / 2 / 3\tCode / Split / Preview\n  Ctrl+B\tShow / hide sidebar\n  Ctrl+Shift+L\tSwitch light / dark\n  F1\tThis help\n\n\
-Editor\n  Ctrl+F\tFind & replace in file\n  F3 / Shift+F3\tNext / previous match\n  Ctrl+Alt+G\tGo to line\n  Ctrl+D\tSelect next occurrence\n  Ctrl+Z / Ctrl+Y\tUndo / redo\n  Alt+↑ / ↓\tMove line up / down\n  Shift+Alt+↑ / ↓\tDuplicate line\n  Ctrl+Shift+K\tDelete line\n  Ctrl+] / [\tIndent / outdent\n  Ctrl+/\tToggle comment\n\n\
+Editor\n  Ctrl+F\tFind & replace in file\n  F3 / Shift+F3\tNext / previous match\n  Ctrl+Alt+G\tGo to line\n  Ctrl+D\tSelect next occurrence\n  Ctrl+Z / Ctrl+Y\tUndo / redo\n  Alt+↑ / ↓\tMove line up / down\n  Ctrl+Shift+D\tDuplicate line\n  Shift+Alt+arrows\tColumn (block) selection\n  Ctrl+Shift+K\tDelete line\n  Ctrl+] / [\tIndent / outdent\n  Ctrl+/\tToggle comment\n\n\
 Preview\n  Drag\tSelect text (by word), Ctrl+C to copy\n  Right-click\tCopy code / link / paragraph\n  Double-click image\tOpen it";
         let t = wide(text);
         let c = wide("Keyboard shortcuts");
@@ -1300,17 +1301,17 @@ Preview\n  Drag\tSelect text (by word), Ctrl+C to copy\n  Right-click\tCopy code
         }
         let in_editor = self.editor.has_focus();
         match (key, shift, alt) {
-            (0x50 /* P */, false, false) => {
+            (0x50 /* P */ | 0x4F /* O */, false, false) => {
                 if self.has_ws() {
                     self.open_file_palette();
                 }
             }
-            (0x4F /* O */, true, false) => {
+            (0x52 /* R */, false, false) => {
                 if self.current.is_some() {
                     self.open_heading_palette();
                 }
             }
-            (0x4F, false, false) => self.pick_folder(),
+            (0x4F, true, false) => self.pick_folder(),
             (0x4E /* N */, false, false) => self.new_file(),
             (0x4C /* L */, true, false) => {
                 let dark = theme::resolve(self.pref);
@@ -1547,7 +1548,8 @@ Preview\n  Drag\tSelect text (by word), Ctrl+C to copy\n  Right-click\tCopy code
                 let code = ((wp >> 16) & 0xffff) as u32;
                 let id = wp & 0xffff;
                 if id == ID_SEARCH_EDIT && code == EN_CHANGE {
-                    unsafe { SetTimer(self.hwnd, T_SEARCH, 120, None) };
+                    // Wait for typing to settle before searching.
+                    unsafe { SetTimer(self.hwnd, T_SEARCH, 300, None) };
                 } else if id == ID_RENAME_EDIT && code == EN_KILLFOCUS {
                     self.finish_rename(true);
                 }
@@ -1580,8 +1582,9 @@ Preview\n  Drag\tSelect text (by word), Ctrl+C to copy\n  Right-click\tCopy code
                     }
                     T_SEARCH => {
                         unsafe { KillTimer(self.hwnd, T_SEARCH) };
-                        self.run_search();
+                        self.run_search_typed();
                     }
+                    T_SEARCH_FLUSH => self.flush_search_results(),
                     T_SNAPSHOT => {
                         unsafe { KillTimer(self.hwnd, T_SNAPSHOT) };
                         if let Some(p) = std::env::var_os("MDELIGHT_SNAPSHOT") {

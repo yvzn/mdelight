@@ -15,7 +15,7 @@ Needs the Rust MSVC toolchain and Visual Studio C++ build tools. `build.rs` comp
 |---|---|
 | `src/app.rs` | Main window: layout, painting, shortcuts, open/autosave/external edits, preview refresh, scroll sync |
 | `src/panels.rs` | Sidebar TreeViews: files (lazy folders), search results, outline |
-| `src/palette.rs`, `src/findbar.rs` | Ctrl+P / Ctrl+Shift+O / prompts; find & replace |
+| `src/palette.rs`, `src/findbar.rs` | Ctrl+P (or Ctrl+O) / Ctrl+R / prompts; find & replace |
 | `src/sci.rs` | Scintilla wrapper (theme, text, find, line commands) |
 | `src/core.rs` | Workspace scan, watcher, file ops, fuzzy find, parallel content search |
 | `src/markdown.rs` | comrak + syntect HTML, preview CSS, outline parser |
