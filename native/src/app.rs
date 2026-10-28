@@ -18,6 +18,7 @@ use crate::core::{Core, SearchEvent, WatchEvent};
 use crate::ffi::{self, PvAnchor};
 use crate::findbar::FindBar;
 use crate::markdown::{self, Heading};
+use crate::mermaid;
 use crate::palette::PaletteUi;
 use crate::panels::{OutlinePanel, SearchPanel, TreePanel};
 use crate::sci::{self, Editor};
@@ -1207,6 +1208,17 @@ impl App {
         self.outline.set_top_line(line, &self.headings);
     }
 
+    fn open_mermaid(&mut self, code: &str) {
+        match mermaid::write_page(code, self.pal.dark) {
+            Ok(page) => {
+                let w = wide(&page.to_string_lossy());
+                let op = wide("open");
+                unsafe { ShellExecuteW(self.hwnd, op.as_ptr(), w.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL) };
+            }
+            Err(e) => self.toast(&format!("Can't open diagram: {e}")),
+        }
+    }
+
     fn on_link(&mut self, href: &str) {
         if let Some(id) = href.strip_prefix('#') {
             let id = CString::new(percent_decode(id)).unwrap_or_default();
@@ -1268,7 +1280,7 @@ impl App {
 Navigate\n  Ctrl+P / Ctrl+O\tGo to file\n  Ctrl+R\tGo to heading\n  Ctrl+Shift+F\tSearch in all files\n  Ctrl+Shift+E\tShow file list\n\n\
 View\n  Ctrl+1 / 2 / 3\tCode / Split / Preview\n  Ctrl+B\tShow / hide sidebar\n  Ctrl+Shift+L\tSwitch light / dark\n  F1\tThis help\n\n\
 Editor\n  Ctrl+F\tFind & replace in file\n  F3 / Shift+F3\tNext / previous match\n  Ctrl+Alt+G\tGo to line\n  Ctrl+D\tSelect next occurrence\n  Ctrl+Z / Ctrl+Y\tUndo / redo\n  Alt+↑ / ↓\tMove line up / down\n  Ctrl+Shift+D\tDuplicate line\n  Shift+Alt+arrows\tColumn (block) selection\n  Ctrl+Shift+K\tDelete line\n  Ctrl+] / [\tIndent / outdent\n  Ctrl+/\tToggle comment\n\n\
-Preview\n  Drag\tSelect text (by word), Ctrl+C to copy\n  Right-click\tCopy code / link / paragraph\n  Double-click image\tOpen it";
+Preview\n  Drag\tSelect text (by word), Ctrl+C to copy\n  Right-click\tCopy code / link / paragraph\n  Double-click image\tOpen it\n  Double-click diagram\tView it in the browser";
         let t = wide(text);
         let c = wide("Keyboard shortcuts");
         unsafe { MessageBoxW(self.hwnd, t.as_ptr(), c.as_ptr(), MB_OK) };
@@ -1629,6 +1641,11 @@ Preview\n  Drag\tSelect text (by word), Ctrl+C to copy\n  Right-click\tCopy code
             ffi::PVN_TOAST => {
                 let t = unsafe { std::ffi::CStr::from_ptr(lp as *const std::ffi::c_char) }.to_string_lossy().into_owned();
                 self.toast(&t);
+                Some(0)
+            }
+            ffi::PVN_MERMAID => {
+                let code = unsafe { std::ffi::CStr::from_ptr(lp as *const std::ffi::c_char) }.to_string_lossy().into_owned();
+                self.open_mermaid(&code);
                 Some(0)
             }
             WM_CLOSE => {

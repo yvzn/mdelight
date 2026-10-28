@@ -28,6 +28,7 @@ using namespace litehtml;
 static const UINT PVN_SCROLL = WM_APP + 0x100;  // user scrolled the preview
 static const UINT PVN_LINK = WM_APP + 0x101;    // lParam: const char* href (valid during the call)
 static const UINT PVN_TOAST = WM_APP + 0x102;   // lParam: const char* message
+static const UINT PVN_MERMAID = WM_APP + 0x103; // lParam: const char* diagram source (UTF-8)
 
 struct PvAnchor {
 	int line;
@@ -525,10 +526,11 @@ struct Preview {
 	int sel_a = -1, sel_b = -1;
 	bool dragging = false, selecting = false;
 	POINT down_pt{};
-	// Hover "Copy" button on the code block under the mouse.
+	// Hover "Copy" button on the code block under the mouse, plus "View" on Mermaid blocks.
 	element::ptr hover_pre;
 	position hover_box;  // document coordinates
-	bool over_btn = false, copied = false;
+	bool hover_mermaid = false;
+	bool over_btn = false, over_view = false, copied = false;
 
 	float scale() const { return GetDpiForWindow(hwnd) / 96.f; }
 	float content_h() const { return doc ? doc->height() + c.vh * 0.4f : 0; }
@@ -585,7 +587,7 @@ static void clear_hover(Preview* p) {
 	if (p->hover_pre)
 		InvalidateRect(p->hwnd, nullptr, FALSE);
 	p->hover_pre.reset();
-	p->over_btn = p->copied = false;
+	p->hover_mermaid = p->over_btn = p->over_view = p->copied = false;
 }
 
 static void scroll_to(Preview* p, float x, float y, bool notify) {
@@ -694,7 +696,14 @@ static D2D1_RECT_F copy_button_rect(Preview* p) {
 	return D2D1::RectF(right - w, top, right, top + h);
 }
 
-static void draw_copy_button(Preview* p, ID2D1RenderTarget* rt) {
+/// The View button of a hovered Mermaid block, left of Copy.
+static D2D1_RECT_F view_button_rect(Preview* p) {
+	D2D1_RECT_F r = copy_button_rect(p);
+	float w = r.right - r.left + 6;
+	return D2D1::RectF(r.left - w, r.top, r.right - w, r.bottom);
+}
+
+static void draw_button(Preview* p, ID2D1RenderTarget* rt, D2D1_RECT_F r, const wchar_t* label, bool hot, bool done) {
 	static IDWriteTextFormat* fmt = nullptr;
 	if (!fmt) {
 		g_dw->CreateTextFormat(pick_family("sans-serif").c_str(), nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL,
@@ -703,16 +712,14 @@ static void draw_copy_button(Preview* p, ID2D1RenderTarget* rt) {
 		fmt->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
 	}
 	bool dark = p->bg.r * 0.3f + p->bg.g * 0.59f + p->bg.b * 0.11f < 0.5f;
-	D2D1_RECT_F r = copy_button_rect(p);
 	auto brush = p->c.brush;
-	float a = p->over_btn ? 0.16f : 0.09f;
+	float a = hot ? 0.16f : 0.09f;
 	brush->SetColor(dark ? D2D1::ColorF(1, 1, 1, a) : D2D1::ColorF(0, 0, 0, a));
 	rt->FillRoundedRectangle(D2D1::RoundedRect(r, 5, 5), brush);
 	D2D1_COLOR_F fg = dark ? D2D1::ColorF(0.85f, 0.86f, 0.88f) : D2D1::ColorF(0.2f, 0.22f, 0.25f);
-	if (p->copied)
+	if (done)
 		fg = D2D1::ColorF(p->sel.r, p->sel.g, p->sel.b);
 	brush->SetColor(fg);
-	const wchar_t* label = p->copied ? L"Copied" : L"Copy";
 	rt->DrawText(label, (UINT32)wcslen(label), fmt, r, brush);
 }
 
@@ -736,8 +743,11 @@ static void draw_doc(Preview* p, ID2D1RenderTarget* rt) {
 					rt->FillRectangle(D2D1::RectF(r.x - p->sx, r.y - p->sy, r.right() - p->sx, r.bottom() - p->sy), p->c.brush);
 				}
 			}
-			if (p->hover_pre && !p->selecting)
-				draw_copy_button(p, rt);
+			if (p->hover_pre && !p->selecting) {
+				draw_button(p, rt, copy_button_rect(p), p->copied ? L"Copied" : L"Copy", p->over_btn, p->copied);
+				if (p->hover_mermaid)
+					draw_button(p, rt, view_button_rect(p), L"View", p->over_view, false);
+			}
 	}
 }
 
@@ -856,27 +866,44 @@ static void copy_code(Preview* p, const element::ptr& pre) {
 	set_clipboard(p->hwnd, t);
 }
 
-/// Track the code block under the mouse (and whether the pointer is on its Copy button).
+/// A ```mermaid block: comrak puts the language on the <code> inside.
+static bool is_mermaid(const element::ptr& pre) {
+	for (auto& ch : pre->children()) {
+		const char* t = ch->get_tagName();
+		const char* cls = t && _stricmp(t, "code") == 0 ? ch->get_attr("class") : nullptr;
+		if (cls && strstr(cls, "language-mermaid"))
+			return true;
+	}
+	return false;
+}
+
+static void open_mermaid(Preview* p, const element::ptr& pre) {
+	std::string t;
+	pre->get_text(t);
+	SendMessageW(GetParent(p->hwnd), PVN_MERMAID, 0, (LPARAM)t.c_str());
+}
+
+/// Track the code block under the mouse (and whether the pointer is on its Copy or View button).
 static void update_hover(Preview* p, POINT pt) {
 	auto pre = p->selecting ? nullptr : ancestor(element_at(p, pt), {"pre"});	if (pre != p->hover_pre) {
 		clear_hover(p);
 		auto ri = pre ? pre->get_render_item() : nullptr;
 		if (ri) {
 			p->hover_pre = pre;
+			p->hover_mermaid = is_mermaid(pre);
 			p->hover_box = ri->get_placement();
 			p->hover_box += ri->get_paddings();
 			p->hover_box += ri->get_borders();
 		}
 		InvalidateRect(p->hwnd, nullptr, FALSE);
 	}
-	bool over = false;
-	if (p->hover_pre) {
-		float s = p->scale();
-		D2D1_RECT_F r = copy_button_rect(p);
-		over = pt.x / s >= r.left && pt.x / s < r.right && pt.y / s >= r.top && pt.y / s < r.bottom;
-	}
-	if (over != p->over_btn) {
+	float s = p->scale(), x = pt.x / s, y = pt.y / s;
+	auto inside = [&](D2D1_RECT_F r) { return x >= r.left && x < r.right && y >= r.top && y < r.bottom; };
+	bool over = p->hover_pre && inside(copy_button_rect(p));
+	bool over_view = p->hover_mermaid && inside(view_button_rect(p));
+	if (over != p->over_btn || over_view != p->over_view) {
 		p->over_btn = over;
+		p->over_view = over_view;
 		InvalidateRect(p->hwnd, nullptr, FALSE);
 	}
 }
@@ -903,12 +930,14 @@ static void context_menu(Preview* p, POINT screen) {
 	auto block = ancestor(el, {"p", "li", "td", "th", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre"});
 	bool has_sel = p->sel_a >= 0 && p->sel_a != p->sel_b;
 
-	enum { CopySel = 1, CopyCode, CopyLink, OpenImage, CopyBlock, CopyAll, SelectAll };
+	enum { CopySel = 1, CopyCode, ViewDiagram, CopyLink, OpenImage, CopyBlock, CopyAll, SelectAll };
 	HMENU m = CreatePopupMenu();
 	if (has_sel)
 		AppendMenuW(m, MF_STRING, CopySel, L"Copy\tCtrl+C");
 	if (pre)
 		AppendMenuW(m, MF_STRING, CopyCode, L"Copy code");
+	if (pre && is_mermaid(pre))
+		AppendMenuW(m, MF_STRING, ViewDiagram, L"View diagram");
 	if (a && a->get_attr("href"))
 		AppendMenuW(m, MF_STRING, CopyLink, L"Copy link address");
 	if (img)
@@ -928,6 +957,9 @@ static void context_menu(Preview* p, POINT screen) {
 	case CopyCode:
 		copy_code(p, pre);
 		SendMessageW(GetParent(p->hwnd), PVN_TOAST, 0, (LPARAM) "Code copied");
+		break;
+	case ViewDiagram:
+		open_mermaid(p, pre);
 		break;
 	case CopyLink:
 		set_clipboard(p->hwnd, widen(a->get_attr("href")));
@@ -1084,6 +1116,10 @@ static LRESULT CALLBACK preview_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
 	case WM_LBUTTONDOWN: {
 		SetFocus(hwnd);
 		POINT pt = client_pt(lp);
+		if (p->hover_mermaid && p->over_view) {
+			open_mermaid(p, p->hover_pre);
+			return 0;
+		}
 		if (p->hover_pre && p->over_btn) {
 			copy_code(p, p->hover_pre);
 			p->copied = true;
@@ -1179,13 +1215,16 @@ static LRESULT CALLBACK preview_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
 		p->dragging = p->selecting = false;
 		return 0;
 	case WM_LBUTTONDBLCLK: {
-		if (auto img = ancestor(element_at(p, client_pt(lp)), {"img"}))
+		element::ptr el = element_at(p, client_pt(lp));
+		if (auto img = ancestor(el, {"img"}))
 			open_image(p, img);
+		else if (auto pre = ancestor(el, {"pre"}); pre && is_mermaid(pre))
+			open_mermaid(p, pre);
 		return 0;
 	}
 	case WM_SETCURSOR:
 		if (LOWORD(lp) == HTCLIENT) {
-			SetCursor(LoadCursorW(nullptr, p->over_btn || p->c.cursor == "pointer" ? IDC_HAND : IDC_ARROW));
+			SetCursor(LoadCursorW(nullptr, p->over_btn || p->over_view || p->c.cursor == "pointer" ? IDC_HAND : IDC_ARROW));
 			return TRUE;
 		}
 		break;
