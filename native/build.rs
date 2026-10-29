@@ -75,5 +75,5 @@ fn main() {
     println!("cargo:rerun-if-changed=cpp");
     println!("cargo:rerun-if-changed=app.rc");
     println!("cargo:rerun-if-changed=app.manifest");
-    assert!(Path::new("../src-tauri/icons/icon.ico").exists(), "icon missing");
+    assert!(Path::new("icon.ico").exists(), "icon missing");
 }
