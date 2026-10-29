@@ -1,5 +1,4 @@
 //! Workspace model: file list, watcher, file operations and searches.
-//! Same behavior as the Tauri backend (src-tauri/src/lib.rs), minus the IPC layer.
 
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
