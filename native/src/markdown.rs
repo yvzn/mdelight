@@ -129,8 +129,8 @@ pub fn render(text: &str, dark: bool) -> String {
     mark_wide_code(&html)
 }
 
-/// Monospace characters that fit the 472px measure at 13px Cascadia Mono, after padding.
-const MEASURE_CHARS: usize = 57;
+/// Code blocks hold at least this many characters a line, like the prose measure's max (~75).
+const MEASURE_CHARS: usize = 75;
 
 /// Tag `<pre>` blocks with a line longer than the measure as `wide`. litehtml has no
 /// min-width for shrink-to-fit blocks, so the stylesheet needs to know which ones grow.
@@ -159,9 +159,11 @@ pub fn css(p: &Palette) -> String {
 html, body {{ background: {bg}; color: {fg}; }}
 body {{ margin: 0; padding: 24px 24px 0; font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif; font-size: 15px; line-height: 1.6; }}
 /* Reading measure: 31.5em of 15px (~68 chars a line, max ~75) for prose, centered. Code, tables
-   and figures may grow to the full width, start at the measure, and stay centered. */
+   and figures may grow to the full width and stay centered; code starts at the same ~75 chars.
+   No calc() in litehtml: pre pads in ch so the width is measure + 2 * 2ch padding. */
+.page {{ --code-measure: {code_measure}ch; }}
 .page > * {{ max-width: 472px; margin-left: auto; margin-right: auto; }}
-.page > pre {{ display: table; box-sizing: border-box; width: 504px; max-width: 100%; }}
+.page > pre {{ display: table; box-sizing: border-box; width: var(--code-measure); max-width: 100%; }}
 .page > pre.wide {{ width: auto; }}
 .page > table {{ max-width: 100%; }}
 .page > p.figure {{ max-width: 100%; text-align: center; }}
@@ -178,7 +180,7 @@ a {{ color: {accent}; text-decoration: none; cursor: pointer; }}
 a:hover {{ text-decoration: underline; }}
 strong {{ font-weight: 600; }}
 code {{ font-family: "Cascadia Mono", Consolas, monospace; font-size: 0.88em; background: {code_bg}; padding: 0.15em 0.35em; border-radius: 4px; }}
-pre {{ background: {code_bg}; padding: 12px 16px; border-radius: 6px; line-height: 1.45; white-space: pre-wrap; }}
+pre {{ font-family: "Cascadia Mono", Consolas, monospace; font-size: 13px; background: {code_bg}; padding: 12px 2ch; border-radius: 6px; line-height: 1.45; white-space: pre-wrap; }}
 pre code {{ background: transparent; padding: 0; font-size: 13px; }}
 blockquote {{ margin-left: 0; margin-right: 0; padding: 0 1em; color: {dim}; border-left: 4px solid {border_strong}; }}
 ul, ol {{ padding-left: 2em; }}
@@ -205,6 +207,7 @@ sup {{ font-size: 0.75em; vertical-align: super; line-height: 0; }}
         accent = c(p.accent),
         code_bg = c(p.code_bg),
         side = c(p.side),
+        code_measure = MEASURE_CHARS + 4,
     )
 }
 
