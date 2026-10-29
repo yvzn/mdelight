@@ -739,6 +739,9 @@ static void draw_button(Preview* p, ID2D1RenderTarget* rt, D2D1_RECT_F r, const 
 	}
 	bool dark = p->bg.r * 0.3f + p->bg.g * 0.59f + p->bg.b * 0.11f < 0.5f;
 	auto brush = p->c.brush;
+	// Opaque base so code under the button doesn't show through the translucent tint.
+	brush->SetColor(p->bg);
+	rt->FillRoundedRectangle(D2D1::RoundedRect(r, 5, 5), brush);
 	float a = hot ? 0.16f : 0.09f;
 	brush->SetColor(dark ? D2D1::ColorF(1, 1, 1, a) : D2D1::ColorF(0, 0, 0, a));
 	rt->FillRoundedRectangle(D2D1::RoundedRect(r, 5, 5), brush);
