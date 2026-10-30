@@ -4,6 +4,7 @@
 
 mod app;
 mod core;
+mod copy;
 mod crash;
 mod ffi;
 mod findbar;

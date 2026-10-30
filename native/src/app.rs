@@ -14,6 +14,7 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
 use windows_sys::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass, ShellExecuteW};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
+use crate::copy;
 use crate::core::{Core, SearchEvent, WatchEvent};
 use crate::ffi::{self, PvAnchor};
 use crate::findbar::FindBar;
@@ -1297,7 +1298,7 @@ impl App {
         let text = "Files & folders\n  Ctrl+Shift+O\tOpen folder\n  Ctrl+N\tNew file\n  F2\tRename / move file\n  Ctrl+S\tSave now (autosave is on)\n\n\
 Navigate\n  Ctrl+P / Ctrl+O\tGo to file\n  Ctrl+R\tGo to heading\n  Ctrl+Shift+F\tSearch in all files\n  Ctrl+Shift+E\tShow file list\n\n\
 View\n  Ctrl+1 / 2 / 3\tCode / Split / Preview\n  Ctrl+B\tShow / hide sidebar\n  Ctrl+Shift+L\tSwitch light / dark\n  F1\tThis help\n\n\
-Editor\n  Ctrl+F\tFind & replace in file\n  F3 / Shift+F3\tNext / previous match\n  Ctrl+Alt+G\tGo to line\n  Ctrl+D\tSelect next occurrence\n  Ctrl+Z / Ctrl+Y\tUndo / redo\n  Alt+↑ / ↓\tMove line up / down\n  Ctrl+Shift+D\tDuplicate line\n  Shift+Alt+arrows\tColumn (block) selection\n  Ctrl+Shift+K\tDelete line\n  Ctrl+] / [\tIndent / outdent\n  Ctrl+/\tToggle comment\n  Ctrl+V\tPaste (web, Word, images as Markdown)\n  Ctrl+Shift+V\tPaste as plain text\n\n\
+Editor\n  Ctrl+F\tFind & replace in file\n  F3 / Shift+F3\tNext / previous match\n  Ctrl+Alt+G\tGo to line\n  Ctrl+D\tSelect next occurrence\n  Ctrl+Z / Ctrl+Y\tUndo / redo\n  Alt+↑ / ↓\tMove line up / down\n  Ctrl+Shift+D\tDuplicate line\n  Shift+Alt+arrows\tColumn (block) selection\n  Ctrl+Shift+K\tDelete line\n  Ctrl+] / [\tIndent / outdent\n  Ctrl+/\tToggle comment\n  Ctrl+V\tPaste (web, Word, images as Markdown)\n  Ctrl+Shift+V\tPaste as plain text\n  Ctrl+Shift+C\tCopy as rich text (HTML)\n\n\
 Preview\n  Drag\tSelect text (by word), Ctrl+C to copy\n  Right-click\tCopy code / link / paragraph\n  Double-click image\tOpen it\n  Double-click diagram\tView it in the browser";
         let t = wide(text);
         let c = wide("Keyboard shortcuts");
@@ -1377,6 +1378,7 @@ Preview\n  Drag\tSelect text (by word), Ctrl+C to copy\n  Right-click\tCopy code
             (0xDB /* [ */, false, false) if in_editor => self.editor.indent(false),
             (0xBF /* / */, false, false) if in_editor => self.editor.toggle_comment(),
             (0x56 /* V */, false, false) if in_editor => self.smart_paste(),
+            (0x43 /* C */, true, false) if in_editor => self.copy_rich(),
             (0x56, true, false) if in_editor => {
                 self.editor.msg(sci::SCI_PASTE, 0, 0);
             }
@@ -1406,6 +1408,17 @@ Preview\n  Drag\tSelect text (by word), Ctrl+C to copy\n  Right-click\tCopy code
                 }
             }
         }
+    }
+
+    /// Ctrl+Shift+C in the editor: the selection (or the whole document) rendered as HTML for
+    /// Word, mail and chat apps, with the Markdown source as the plain-text version.
+    fn copy_rich(&mut self) {
+        let (Some(cur), Some(root)) = (self.current.clone(), self.root.clone()) else { return };
+        let sel = self.editor.selection();
+        let md = if sel.is_empty() { self.editor.text() } else { sel };
+        let dir = root.join(dirname(&cur).replace('/', "\\"));
+        copy::set_rich(self.hwnd, &copy::markdown_html(&md, &dir), &md);
+        self.toast("Copied as rich text");
     }
 
     /// Keys in our single-line edits; true when handled.
@@ -1686,6 +1699,13 @@ Preview\n  Drag\tSelect text (by word), Ctrl+C to copy\n  Right-click\tCopy code
             ffi::PVN_TOAST => {
                 let t = unsafe { std::ffi::CStr::from_ptr(lp as *const std::ffi::c_char) }.to_string_lossy().into_owned();
                 self.toast(&t);
+                Some(0)
+            }
+            ffi::PVN_COPY => {
+                let c = unsafe { &*(lp as *const ffi::PvCopy) };
+                let html = unsafe { std::ffi::CStr::from_ptr(c.html) }.to_string_lossy();
+                let text = unsafe { crate::win::from_wide(std::slice::from_raw_parts(c.text, c.text_len as usize)) };
+                copy::set_rich(self.hwnd, &html, &text);
                 Some(0)
             }
             ffi::PVN_MERMAID => {

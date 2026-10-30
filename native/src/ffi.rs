@@ -8,6 +8,15 @@ pub const PVN_SCROLL: u32 = 0x8000 + 0x100;
 pub const PVN_LINK: u32 = 0x8000 + 0x101;
 pub const PVN_TOAST: u32 = 0x8000 + 0x102;
 pub const PVN_MERMAID: u32 = 0x8000 + 0x103;
+pub const PVN_COPY: u32 = 0x8000 + 0x104;
+
+/// PVN_COPY payload: the selection as an HTML fragment (UTF-8) and as plain text.
+#[repr(C)]
+pub struct PvCopy {
+    pub html: *const c_char,
+    pub text: *const u16,
+    pub text_len: i32,
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]

@@ -29,6 +29,7 @@ static const UINT PVN_SCROLL = WM_APP + 0x100;  // user scrolled the preview
 static const UINT PVN_LINK = WM_APP + 0x101;    // lParam: const char* href (valid during the call)
 static const UINT PVN_TOAST = WM_APP + 0x102;   // lParam: const char* message
 static const UINT PVN_MERMAID = WM_APP + 0x103; // lParam: const char* diagram source (UTF-8)
+static const UINT PVN_COPY = WM_APP + 0x104;    // lParam: const PvCopy* (selection as HTML and text)
 
 struct PvAnchor {
 	int line;
@@ -685,9 +686,8 @@ static int caret_at(Preview* p, float x, float y) {
 	return n;
 }
 
-static std::wstring selected_text(Preview* p) {
+static std::wstring range_text(Preview* p, int a, int b) {
 	auto& items = text_items(p);
-	int a = std::min(p->sel_a, p->sel_b), b = std::max(p->sel_a, p->sel_b);
 	std::string out;
 	float prev_bottom = -1, prev_top = -1;
 	for (int i = std::max(0, a); i < std::min(b, (int)items.size()); i++) {
@@ -708,6 +708,138 @@ static std::wstring selected_text(Preview* p) {
 		prev_bottom = it.box.bottom();
 	}
 	return widen(out.c_str());
+}
+
+static void escape_html(std::string& out, const std::string& s, bool attr) {
+	for (char ch : s) {
+		switch (ch) {
+		case '&': out += "&amp;"; break;
+		case '<': out += "&lt;"; break;
+		case '>': out += "&gt;"; break;
+		case '"': if (attr) { out += "&quot;"; break; } [[fallthrough]];
+		default: out += ch;
+		}
+	}
+}
+
+/// Write the part of `el` that holds text items [a, b) as HTML, with every enclosing element
+/// so formatting, lists and tables survive. `idx` counts text items in collect_text() order.
+/// Returns whether anything was written.
+static bool serialize(Preview* p, const element::ptr& el, int& idx, int a, int b, std::string& out) {
+	if (el->is_text()) {
+		bool counted = el->get_render_item() != nullptr;
+		// Uncounted text (collapsed or preformatted whitespace) belongs in when it sits between selected words.
+		bool in = counted ? idx >= a && idx < b : idx > a && idx < b;
+		if (counted)
+			idx++;
+		if (!in)
+			return false;
+		std::string t;
+		el->get_text(t);
+		escape_html(out, t, false);
+		return true;
+	}
+	const char* tag = el->get_tagName();
+	std::string name = tag ? tag : "";
+	for (auto& ch : name)
+		ch = (char)tolower((unsigned char)ch);
+	static const char* const skip[] = {"style", "script", "title", "head"};
+	for (auto s : skip)
+		if (name == s)
+			return false;
+	static const char* const voids[] = {"img", "br", "hr"};
+	for (auto v : voids) {
+		if (name != v)
+			continue;
+		if (!(name == "img" ? idx >= a && idx < b : idx > a && idx < b))
+			return false;
+		out += "<" + name;
+		if (name == "img") {
+			for (auto at : {"alt", "title"}) {
+				if (const char* v = el->get_attr(at)) {
+					out += std::string(" ") + at + "=\"";
+					escape_html(out, v, true);
+					out += "\"";
+				}
+			}
+			const char* src = el->get_attr("src", "");
+			std::wstring local = p->c.resolve(src);
+			std::string url = src;
+			if (!local.empty()) {
+				url = "file:///" + narrow(local);
+				std::replace(url.begin(), url.end(), '\\', '/');
+			}
+			out += " src=\"";
+			escape_html(out, url, true);
+			out += "\"";
+		}
+		out += ">";
+		return true;
+	}
+	// The document wrappers add nothing to a fragment: write their children only.
+	const char* cls = el->get_attr("class");
+	bool wrapper = name.empty() || name == "html" || name == "body" || (name == "div" && cls && strcmp(cls, "page") == 0);
+	std::string inner;
+	bool any = false;
+	for (auto& ch : el->children())
+		any |= serialize(p, ch, idx, a, b, inner);
+	if (!any)
+		return false;
+	if (wrapper) {
+		out += inner;
+		return true;
+	}
+	out += "<" + name;
+	for (auto at : {"href", "title", "style", "colspan", "rowspan", "start", "align"}) {
+		if (const char* v = el->get_attr(at)) {
+			out += std::string(" ") + at + "=\"";
+			escape_html(out, v, true);
+			out += "\"";
+		}
+	}
+	out += ">" + inner + "</" + name + ">";
+	return true;
+}
+
+struct PvCopy {
+	const char* html;
+	const wchar_t* text;
+	int text_len;
+};
+
+/// Copy text items [a, b) as HTML plus plain text; the parent puts both on the clipboard.
+static void copy_range(Preview* p, int a, int b) {
+	if (!p->doc || a >= b)
+		return;
+	std::string html;
+	int idx = 0;
+	serialize(p, p->doc->root(), idx, a, b, html);
+	std::wstring text = range_text(p, a, b);
+	PvCopy c{html.c_str(), text.c_str(), (int)text.size()};
+	SendMessageW(GetParent(p->hwnd), PVN_COPY, 0, (LPARAM)&c);
+}
+
+static void copy_selection(Preview* p) {
+	if (p->sel_a >= 0 && p->sel_a != p->sel_b)
+		copy_range(p, std::min(p->sel_a, p->sel_b), std::max(p->sel_a, p->sel_b));
+}
+
+/// Copy the text items inside `block` (a paragraph, list item...).
+static void copy_block(Preview* p, const element::ptr& block) {
+	auto& items = text_items(p);
+	int a = -1, b = -1;
+	for (int i = 0; i < (int)items.size(); i++) {
+		for (auto e = items[i].el; e; e = e->parent()) {
+			if (e == block) {
+				if (a < 0)
+					a = i;
+				b = i + 1;
+				break;
+			}
+		}
+	}
+	if (a >= 0)
+		copy_range(p, a, b);
 }
 
 /// The Copy button of the hovered code block, in view coordinates; it sticks to the top of the
@@ -981,7 +1113,7 @@ static void context_menu(Preview* p, POINT screen) {
 	DestroyMenu(m);
 	switch (cmd) {
 	case CopySel:
-		set_clipboard(p->hwnd, selected_text(p));
+		copy_selection(p);
 		break;
 	case CopyCode:
 		copy_code(p, pre);
@@ -997,7 +1129,7 @@ static void context_menu(Preview* p, POINT screen) {
 		open_image(p, img);
 		break;
 	case CopyBlock:
-		set_clipboard(p->hwnd, element_text(block));
+		copy_block(p, block);
 		break;
 	case SelectAll:
 		p->sel_a = 0;
@@ -1006,7 +1138,7 @@ static void context_menu(Preview* p, POINT screen) {
 		break;
 	case CopyAll:
 		if (p->doc)
-			set_clipboard(p->hwnd, element_text(p->doc->root()));
+			copy_range(p, 0, (int)text_items(p).size());
 		break;
 	}
 }
@@ -1129,8 +1261,8 @@ static LRESULT CALLBACK preview_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
 		case VK_HOME: scroll_to(p, 0, 0, true); return 0;
 		case VK_END: scroll_to(p, p->sx, 1e9f, true); return 0;
 		case 'C':
-			if (ctrl && p->sel_a >= 0 && p->sel_a != p->sel_b)
-				set_clipboard(hwnd, selected_text(p));
+			if (ctrl)
+				copy_selection(p);
 			return 0;
 		case 'A':
 			if (ctrl) {
