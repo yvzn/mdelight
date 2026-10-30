@@ -20,6 +20,7 @@ use crate::findbar::FindBar;
 use crate::markdown::{self, Heading};
 use crate::mermaid;
 use crate::palette::PaletteUi;
+use crate::paste;
 use crate::panels::{OutlinePanel, SearchPanel, TreePanel};
 use crate::sci::{self, Editor};
 use crate::settings::Settings;
@@ -1296,7 +1297,7 @@ impl App {
         let text = "Files & folders\n  Ctrl+Shift+O\tOpen folder\n  Ctrl+N\tNew file\n  F2\tRename / move file\n  Ctrl+S\tSave now (autosave is on)\n\n\
 Navigate\n  Ctrl+P / Ctrl+O\tGo to file\n  Ctrl+R\tGo to heading\n  Ctrl+Shift+F\tSearch in all files\n  Ctrl+Shift+E\tShow file list\n\n\
 View\n  Ctrl+1 / 2 / 3\tCode / Split / Preview\n  Ctrl+B\tShow / hide sidebar\n  Ctrl+Shift+L\tSwitch light / dark\n  F1\tThis help\n\n\
-Editor\n  Ctrl+F\tFind & replace in file\n  F3 / Shift+F3\tNext / previous match\n  Ctrl+Alt+G\tGo to line\n  Ctrl+D\tSelect next occurrence\n  Ctrl+Z / Ctrl+Y\tUndo / redo\n  Alt+↑ / ↓\tMove line up / down\n  Ctrl+Shift+D\tDuplicate line\n  Shift+Alt+arrows\tColumn (block) selection\n  Ctrl+Shift+K\tDelete line\n  Ctrl+] / [\tIndent / outdent\n  Ctrl+/\tToggle comment\n\n\
+Editor\n  Ctrl+F\tFind & replace in file\n  F3 / Shift+F3\tNext / previous match\n  Ctrl+Alt+G\tGo to line\n  Ctrl+D\tSelect next occurrence\n  Ctrl+Z / Ctrl+Y\tUndo / redo\n  Alt+↑ / ↓\tMove line up / down\n  Ctrl+Shift+D\tDuplicate line\n  Shift+Alt+arrows\tColumn (block) selection\n  Ctrl+Shift+K\tDelete line\n  Ctrl+] / [\tIndent / outdent\n  Ctrl+/\tToggle comment\n  Ctrl+V\tPaste (web, Word, images as Markdown)\n  Ctrl+Shift+V\tPaste as plain text\n\n\
 Preview\n  Drag\tSelect text (by word), Ctrl+C to copy\n  Right-click\tCopy code / link / paragraph\n  Double-click image\tOpen it\n  Double-click diagram\tView it in the browser";
         let t = wide(text);
         let c = wide("Keyboard shortcuts");
@@ -1375,9 +1376,36 @@ Preview\n  Drag\tSelect text (by word), Ctrl+C to copy\n  Right-click\tCopy code
             (0xDD /* ] */, false, false) if in_editor => self.editor.indent(true),
             (0xDB /* [ */, false, false) if in_editor => self.editor.indent(false),
             (0xBF /* / */, false, false) if in_editor => self.editor.toggle_comment(),
+            (0x56 /* V */, false, false) if in_editor => self.smart_paste(),
+            (0x56, true, false) if in_editor => {
+                self.editor.msg(sci::SCI_PASTE, 0, 0);
+            }
             _ => return false,
         }
         true
+    }
+
+    /// Ctrl+V in the editor: rich text becomes Markdown, a bare image is saved under
+    /// `images/` next to the document and linked. Plain text (and anything inside a code
+    /// fence) pastes as usual.
+    fn smart_paste(&mut self) {
+        let clip = if self.editor.in_code_fence() { paste::Clip::Plain } else { paste::read(self.hwnd) };
+        match clip {
+            paste::Clip::Plain => {
+                self.editor.msg(sci::SCI_PASTE, 0, 0);
+            }
+            paste::Clip::Markdown(md) => self.editor.insert(&md),
+            paste::Clip::Image(png) => {
+                let (Some(cur), Some(root)) = (self.current.clone(), self.root.clone()) else { return };
+                let dir = root.join(dirname(&cur).replace('/', "\\"));
+                let (path, rel) = paste::image_target(&dir);
+                let saved = std::fs::create_dir_all(path.parent().unwrap()).and_then(|_| std::fs::write(&path, png));
+                match saved {
+                    Ok(()) => self.editor.insert(&format!("![]({rel})")),
+                    Err(e) => self.toast(&format!("Could not save image: {e}")),
+                }
+            }
+        }
     }
 
     /// Keys in our single-line edits; true when handled.

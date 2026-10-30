@@ -13,9 +13,11 @@ comrak = { version = "0.59.0", default-features = false }
 grep-matcher = "0.1.9"
 grep-regex = "0.1.14"
 grep-searcher = "0.1.17"
+htmd = "0.5.6"
 ignore = "0.4.33"
 notify-debouncer-mini = "0.7.0"
 nucleo-matcher = "0.3.1"
+png = "0.18.1"
 regex = "1.13.1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"

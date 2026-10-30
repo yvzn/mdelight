@@ -18,6 +18,7 @@ pub const SCI_GETCURRENTPOS: u32 = 2008;
 pub const SCI_GETANCHOR: u32 = 2009;
 pub const SCI_SETSAVEPOINT: u32 = 2014;
 pub const SCI_GOTOLINE: u32 = 2024;
+pub const SCI_GETEOLMODE: u32 = 2030;
 pub const SCI_SETEOLMODE: u32 = 2031;
 pub const SCI_SETTABWIDTH: u32 = 2036;
 pub const SCI_SETCODEPAGE: u32 = 2037;
@@ -50,6 +51,7 @@ pub const SCI_POSITIONFROMLINE: u32 = 2167;
 pub const SCI_SCROLLCARET: u32 = 2169;
 pub const SCI_REPLACESEL: u32 = 2170;
 pub const SCI_EMPTYUNDOBUFFER: u32 = 2175;
+pub const SCI_PASTE: u32 = 2179;
 pub const SCI_SETTEXT: u32 = 2181;
 pub const SCI_SETCARETWIDTH: u32 = 2188;
 pub const SCI_SETTARGETSTART: u32 = 2190;
@@ -495,6 +497,33 @@ impl Editor {
 
     pub fn indent(&self, more: bool) {
         self.msg(if more { SCI_TAB } else { SCI_BACKTAB }, 0, 0);
+    }
+
+    /// Replace the selection with `text`, written with the document's line endings.
+    pub fn insert(&self, text: &str) {
+        let text = text.replace("\r\n", "\n");
+        let text = if self.msg(SCI_GETEOLMODE, 0, 0) == 0 { text.replace('\n', "\r\n") } else { text };
+        let c = CString::new(text.replace('\0', "")).unwrap();
+        self.msg(SCI_REPLACESEL, 0, c.as_ptr() as isize);
+    }
+
+    /// Whether the caret sits inside a fenced code block.
+    pub fn in_code_fence(&self) -> bool {
+        let pos = self.msg(SCI_GETSELECTIONSTART, 0, 0) as usize;
+        let line = self.msg(SCI_LINEFROMPOSITION, pos, 0) as usize;
+        let start = self.msg(SCI_POSITIONFROMLINE, line, 0) as usize;
+        let text = self.text();
+        let mut fence: Option<&str> = None;
+        for l in text.get(..start).unwrap_or("").lines() {
+            let t = l.trim_start();
+            let mark = if t.starts_with("```") { "```" } else if t.starts_with("~~~") { "~~~" } else { continue };
+            match fence {
+                None => fence = Some(mark),
+                Some(f) if f == mark => fence = None,
+                _ => {}
+            }
+        }
+        fence.is_some()
     }
 
     /// Wrap the selected lines in an HTML comment, or unwrap them.

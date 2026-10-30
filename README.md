@@ -18,6 +18,7 @@ What you get:
 - A live preview with syntax-highlighted code blocks, tables, local images and scroll sync
 - A sidebar with the folder's files, full-text search results and the document outline
 - Quick file switching with Ctrl+P (or Ctrl+O), autosave, and reloading when files change on disk
+- Smart paste: content copied from web pages, Word, Outlook or Google Docs becomes Markdown, and pasted screenshots are saved to `images/` and linked (Ctrl+Shift+V pastes plain text)
 - Light and dark themes
 - Mermaid diagrams viewable in your browser, offline (mermaid.js is bundled)
 

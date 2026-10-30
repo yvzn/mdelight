@@ -12,6 +12,7 @@ mod markdown;
 mod mermaid;
 mod palette;
 mod panels;
+mod paste;
 mod sci;
 mod settings;
 mod theme;
