@@ -86,6 +86,7 @@ pub const SCI_SETENDATLASTLINE: u32 = 2277;
 pub const SCI_TAB: u32 = 2327;
 pub const SCI_BACKTAB: u32 = 2328;
 pub const SCI_LINEDELETE: u32 = 2338;
+pub const SCI_COPYALLOWLINE: u32 = 2519;
 pub const SCI_SETMODEVENTMASK: u32 = 2359;
 pub const SCI_LINESONSCREEN: u32 = 2370;
 pub const SCI_USEPOPUP: u32 = 2371;
@@ -219,6 +220,8 @@ impl Editor {
         self.msg(SCI_ASSIGNCMDKEY, key(SCK_DOWN, SCMOD_ALT | SCMOD_SHIFT), SCI_LINEDOWNRECTEXTEND as isize);
         self.msg(SCI_ASSIGNCMDKEY, key('K' as usize, SCMOD_CTRL | SCMOD_SHIFT), SCI_LINEDELETE as isize);
         self.msg(SCI_CLEARCMDKEY, key('D' as usize, SCMOD_CTRL), 0);
+        // Ctrl+C with nothing selected copies the current line; pasting it inserts a whole line.
+        self.msg(SCI_ASSIGNCMDKEY, key('C' as usize, SCMOD_CTRL), SCI_COPYALLOWLINE as isize);
     }
 
     fn set_font(&self, style: usize, family: &str, size: f32) {
