@@ -78,6 +78,7 @@ pub enum Hit {
     Tab(Panel),
     WsMenu,
     NewFile,
+    SearchFuzzy,
     SearchCase,
     SearchRegex,
     WelcomeOpen,
@@ -542,7 +543,7 @@ impl App {
         move_window(self.tree.hwnd, &panel_rect_tree);
         show(self.tree.hwnd, show_side && self.panel == Panel::Files);
         let inner = self.px(6.0);
-        let edit_r = rect(l.search_box.left + inner, l.search_box.top + self.px(5.0), l.search_box.right - self.px(60.0), l.search_box.bottom - self.px(5.0));
+        let edit_r = rect(l.search_box.left + inner, l.search_box.top + self.px(5.0), l.search_box.right - self.px(86.0), l.search_box.bottom - self.px(5.0));
         move_window(self.search.edit, &edit_r);
         show(self.search.edit, show_side && self.panel == Panel::Search);
         move_window(self.search.tree, &rect(0, l.search_status.bottom + self.px(2.0), sw, h));
@@ -650,8 +651,12 @@ impl App {
                     let sz = self.px(24.0);
                     let rx = rect(b.right - self.px(3.0) - sz, b.top + self.px(2.0), b.right - self.px(3.0), b.bottom - self.px(2.0));
                     let rc = rect(rx.left - sz - self.px(2.0), rx.top, rx.left - self.px(2.0), rx.bottom);
-                    self.button(p, rc, Hit::SearchCase, "Aa", self.fonts.small, self.search.case, true, pal.side);
-                    self.button(p, rx, Hit::SearchRegex, ".*", self.fonts.small, self.search.regex, true, pal.side);
+                    let rf = rect(rc.left - sz - self.px(2.0), rx.top, rc.left - self.px(2.0), rx.bottom);
+                    // Fuzzy search ignores case and regex.
+                    let (fuzzy, exact) = (self.search.fuzzy, !self.search.fuzzy);
+                    self.button(p, rf, Hit::SearchFuzzy, "~", self.fonts.small, fuzzy, true, pal.side);
+                    self.button(p, rc, Hit::SearchCase, "Aa", self.fonts.small, self.search.case && exact, exact, pal.side);
+                    self.button(p, rx, Hit::SearchRegex, ".*", self.fonts.small, self.search.regex && exact, exact, pal.side);
                     p.text(&self.search.status, &l.search_status, pal.fg_dim, self.fonts.small, LEFT_MID);
                 }
                 Panel::Outline => {}
@@ -755,6 +760,13 @@ impl App {
             }
             Hit::WsMenu => self.ws_menu(),
             Hit::NewFile => self.new_file(),
+            Hit::SearchFuzzy => {
+                self.search.fuzzy = !self.search.fuzzy;
+                self.run_search();
+                self.invalidate();
+            }
+            Hit::SearchCase if self.search.fuzzy => {}
+            Hit::SearchRegex if self.search.fuzzy => {}
             Hit::SearchCase => {
                 self.search.case = !self.search.case;
                 self.run_search();

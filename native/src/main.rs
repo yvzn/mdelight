@@ -7,6 +7,7 @@ mod core;
 mod crash;
 mod ffi;
 mod findbar;
+mod fuzzy;
 mod markdown;
 mod mermaid;
 mod palette;

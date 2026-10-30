@@ -13,8 +13,10 @@ use notify_debouncer_mini::{new_debouncer, notify::RecursiveMode, DebouncedEvent
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 
-const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
-const MAX_HITS: usize = 5000;
+use crate::fuzzy::{self, FuzzyIndex};
+
+pub const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
+pub const MAX_HITS: usize = 5000;
 const MAX_LINE_CHARS: usize = 240;
 const MAX_LINE_MATCHES: usize = 50;
 
@@ -37,6 +39,10 @@ pub struct Core {
     ws: Arc<Mutex<WsState>>,
     watcher: Option<Debouncer<notify_debouncer_mini::notify::RecommendedWatcher>>,
     search_gen: Arc<AtomicU64>,
+    /// Fuzzy-search index of the open workspace, built on first use.
+    fuzzy: Arc<Mutex<Option<FuzzyIndex>>>,
+    /// Set by the watcher: the fuzzy index must check files before its next search.
+    fuzzy_dirty: Arc<AtomicBool>,
 }
 
 // ---------------------------------------------------------------- workspace
@@ -107,9 +113,13 @@ impl Core {
             ws.root = Some(root.clone());
             set_files(&mut ws, files.clone());
         }
+        // Fresh slot: a search still running on the old workspace keeps (and then drops) the old one.
+        self.fuzzy = Arc::default();
+        self.fuzzy_dirty = Arc::new(AtomicBool::new(true));
 
         // Watch for created/removed files (fresh list) and edits made outside the app.
         let ws_arc = self.ws.clone();
+        let fuzzy_dirty = self.fuzzy_dirty.clone();
         let watch_root = root.clone();
         let mut debouncer = new_debouncer(Duration::from_millis(250), move |res: Result<Vec<DebouncedEvent>, _>| {
             let Ok(events) = res else { return };
@@ -120,6 +130,9 @@ impl Core {
                 }
                 classify(&ws, &watch_root, &events)
             };
+            if rescan || !modified.is_empty() {
+                fuzzy_dirty.store(true, Ordering::SeqCst);
+            }
             if !modified.is_empty() {
                 notify(WatchEvent::Modified(modified));
             }
@@ -241,17 +254,22 @@ impl Core {
     }
 
     /// Search file contents on worker threads; `sink` gets results as they come. A newer
-    /// search (or an empty query) cancels the running one.
+    /// search (or an empty query) cancels the running one. `fuzzy` ignores `regex` and
+    /// `case_sensitive`: typo- and accent-tolerant, best results first (see `fuzzy`).
     pub fn search(
         &self,
         query: &str,
         regex: bool,
         case_sensitive: bool,
+        fuzzy: bool,
         sink: impl Fn(SearchEvent) + Send + Sync + 'static,
     ) -> Result<(), String> {
         let gen = self.search_gen.fetch_add(1, Ordering::SeqCst) + 1;
         if query.is_empty() {
             return Ok(());
+        }
+        if fuzzy {
+            return self.search_fuzzy(query, gen, sink);
         }
         let pattern = if regex { query.to_string() } else { regex::escape(query) };
         let matcher = RegexMatcherBuilder::new()
@@ -335,6 +353,19 @@ impl Core {
         Ok(())
     }
 
+    fn search_fuzzy(&self, query: &str, gen: u64, sink: impl Fn(SearchEvent) + Send + Sync + 'static) -> Result<(), String> {
+        let (root, files) = {
+            let ws = self.ws.lock().unwrap();
+            (ws.root.clone().ok_or("no workspace open")?, ws.files.clone())
+        };
+        let (slot, dirty, gen_ref) = (self.fuzzy.clone(), self.fuzzy_dirty.clone(), self.search_gen.clone());
+        let query = query.to_string();
+        std::thread::spawn(move || {
+            fuzzy::run(&slot, &dirty, &root, &files, &query, gen, &|| gen_ref.load(Ordering::Relaxed), &sink);
+        });
+        Ok(())
+    }
+
     /// Generation of the latest search; results from older ones are stale.
     pub fn search_gen(&self) -> u64 {
         self.search_gen.load(Ordering::SeqCst)
@@ -366,10 +397,11 @@ pub struct LineHit {
 pub enum SearchEvent {
     File { gen: u64, path: String, hits: Vec<LineHit> },
     Done { gen: u64, files: usize, hits: usize, ms: u128, truncated: bool },
+    Failed { gen: u64, error: String },
 }
 
 /// Trim a long line to a window around the first match.
-fn make_hit(line_no: u64, line: &str, found: &[(usize, usize)]) -> LineHit {
+pub fn make_hit(line_no: u64, line: &str, found: &[(usize, usize)]) -> LineHit {
     let line = line.trim_end_matches(['\r', '\n']);
     let first_start = found.first().map(|r| r.0).unwrap_or(0);
     let mut start = 0;

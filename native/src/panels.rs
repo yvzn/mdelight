@@ -253,6 +253,8 @@ pub struct SearchPanel {
     pub tree: HWND,
     pub case: bool,
     pub regex: bool,
+    /// Typo- and accent-tolerant ranked search instead of exact matching.
+    pub fuzzy: bool,
     pub status: String,
     hits: Vec<SearchHit>,
     /// Results received since the last flush into the tree (one redraw per batch).
@@ -276,6 +278,7 @@ pub struct Mark {
     query: String,
     regex: bool,
     case: bool,
+    fuzzy: bool,
     pub re: regex::Regex,
 }
 
@@ -283,6 +286,23 @@ pub struct Mark {
 fn search_regex(query: &str, regex: bool, case: bool) -> Option<regex::Regex> {
     let pattern = if regex { query.to_string() } else { regex::escape(query) };
     regex::RegexBuilder::new(&pattern).case_insensitive(!case).build().ok()
+}
+
+/// For fuzzy results: the words that matched (as found, e.g. "Métier", "metiers"), longest first.
+fn fuzzy_regex(hits: &[SearchHit]) -> Option<regex::Regex> {
+    let mut words: Vec<String> = hits
+        .iter()
+        .flat_map(|h| h.ranges.iter().map(|&(a, b)| String::from_utf16_lossy(&h.label[a..b]).to_lowercase()))
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .take(500)
+        .collect();
+    if words.is_empty() {
+        return None;
+    }
+    words.sort_by(|a, b| b.len().cmp(&a.len()).then(a.cmp(b)));
+    let alt = words.iter().map(|w| regex::escape(w)).collect::<Vec<_>>().join("|");
+    regex::RegexBuilder::new(&format!(r"\b(?:{alt})\b")).case_insensitive(true).build().ok()
 }
 
 /// Item label for a hit, with the match byte ranges mapped to UTF-16 offsets in it.
@@ -302,6 +322,7 @@ impl SearchPanel {
             tree: make_tree(parent, ID_SEARCH_TREE, true),
             case: false,
             regex: false,
+            fuzzy: false,
             status: String::new(),
             hits: Vec::new(),
             pending: Vec::new(),
@@ -521,8 +542,8 @@ impl App {
     /// line, so they wait for Enter instead.
     pub fn run_search_typed(&mut self) {
         let query = get_text(self.search.edit);
-        if query.chars().count() == 1 && !self.search.regex {
-            let _ = self.core.search("", false, false, |_| {}); // cancel any running search
+        if query.chars().count() == 1 && (self.search.fuzzy || !self.search.regex) {
+            let _ = self.core.search("", false, false, false, |_| {}); // cancel any running search
             self.reset_results();
             self.search.status = "Type 2+ characters, or press Enter".into();
             self.invalidate();
@@ -553,8 +574,8 @@ impl App {
 
     pub fn run_search(&mut self) {
         let query = get_text(self.search.edit);
-        let (regex, case) = (self.search.regex, self.search.case);
-        if self.search.mark.as_ref().is_some_and(|m| (m.query.as_str(), m.regex, m.case) != (query.as_str(), regex, case)) {
+        let (regex, case, fuzzy) = (self.search.regex, self.search.case, self.search.fuzzy);
+        if self.search.mark.as_ref().is_some_and(|m| (m.query.as_str(), m.regex, m.case, m.fuzzy) != (query.as_str(), regex, case, fuzzy)) {
             self.search.mark = None;
             self.apply_search_mark();
         }
@@ -568,7 +589,7 @@ impl App {
         }
         self.search.status = if query.is_empty() { String::new() } else { "Searching…".into() };
         let hwnd = self.hwnd as usize;
-        let res = self.core.search(&query, self.search.regex, self.search.case, move |ev| unsafe {
+        let res = self.core.search(&query, regex, case, fuzzy, move |ev| unsafe {
             PostMessageW(hwnd as HWND, WM_SEARCH, 0, Box::into_raw(Box::new(ev)) as isize);
         });
         if let Err(e) = res {
@@ -623,6 +644,12 @@ impl App {
                 }
                 let s = |n: usize| if n == 1 { "" } else { "s" };
                 self.search.status = format!("{hits} result{} in {files} file{} · {ms} ms{}", s(hits), s(files), if truncated { " (truncated)" } else { "" });
+                self.invalidate();
+            }
+            SearchEvent::Failed { gen, error } if gen == latest => {
+                self.cancel_pending();
+                self.clear_results();
+                self.search.status = error;
                 self.invalidate();
             }
             _ => {}
@@ -680,8 +707,9 @@ impl App {
         }
         let Some((path, line)) = self.search.hits.get(p as usize - 1).map(|h| (h.path.clone(), h.line)) else { return };
         if self.search.mark.is_none() {
-            let (query, regex, case) = (get_text(self.search.edit), self.search.regex, self.search.case);
-            self.search.mark = search_regex(&query, regex, case).map(|re| Mark { query, regex, case, re });
+            let (query, regex, case, fuzzy) = (get_text(self.search.edit), self.search.regex, self.search.case, self.search.fuzzy);
+            let re = if fuzzy { fuzzy_regex(&self.search.hits) } else { search_regex(&query, regex, case) };
+            self.search.mark = re.map(|re| Mark { query, regex, case, fuzzy, re });
             // A newly opened file picks the mark up as it loads.
             if self.current.as_deref() == Some(path.as_str()) {
                 self.apply_search_mark();
