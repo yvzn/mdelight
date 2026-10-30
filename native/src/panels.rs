@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use windows_sys::Win32::Foundation::*;
-use windows_sys::Win32::Graphics::Gdi::{InvalidateRect, ScreenToClient};
+use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Controls::*;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{SetFocus, VK_RETURN};
@@ -41,15 +41,20 @@ fn tree_font(h: HWND, scale: f32, fonts: &Fonts) {
 
 /// `children`: Some(..) forces the expand button (lazy folders); None lets the tree count real children.
 fn insert(tree: HWND, parent: HTREEITEM, text: &str, param: isize, children: Option<bool>) -> HTREEITEM {
+    insert_state(tree, parent, text, param, children, 0)
+}
+
+/// `insert` with initial item state, e.g. TVIS_EXPANDED (no expand round trip per item).
+fn insert_state(tree: HWND, parent: HTREEITEM, text: &str, param: isize, children: Option<bool>, state: u32) -> HTREEITEM {
     let mut w = wide(text);
     let mut ins: TVINSERTSTRUCTW = unsafe { std::mem::zeroed() };
     ins.hParent = parent;
     ins.hInsertAfter = TVI_LAST;
     ins.Anonymous.item = TVITEMW {
-        mask: TVIF_TEXT | TVIF_PARAM | if children.is_some() { TVIF_CHILDREN } else { 0 },
+        mask: TVIF_TEXT | TVIF_PARAM | TVIF_STATE | if children.is_some() { TVIF_CHILDREN } else { 0 },
         hItem: 0,
-        state: 0,
-        stateMask: 0,
+        state,
+        stateMask: state,
         pszText: w.as_mut_ptr(),
         cchTextMax: 0,
         iImage: 0,
@@ -70,6 +75,17 @@ fn item_param(tree: HWND, item: HTREEITEM) -> isize {
 
 fn clear(tree: HWND) {
     send(tree, TVM_DELETEITEM, 0, TVI_ROOT as isize);
+}
+
+/// Suspend painting (and scrollbar updates) around a bulk change.
+fn freeze(tree: HWND) {
+    send(tree, WM_SETREDRAW, 0, 0);
+}
+
+/// Resume painting; repaints the frame too so the scrollbar lands in one step.
+fn thaw(tree: HWND) {
+    send(tree, WM_SETREDRAW, 1, 0);
+    unsafe { RedrawWindow(tree, std::ptr::null(), std::ptr::null_mut(), RDW_ERASE | RDW_FRAME | RDW_INVALIDATE) };
 }
 
 fn select(tree: HWND, item: HTREEITEM) {
@@ -238,10 +254,45 @@ pub struct SearchPanel {
     pub case: bool,
     pub regex: bool,
     pub status: String,
-    hits: Vec<(String, usize)>,
+    hits: Vec<SearchHit>,
     /// Results received since the last flush into the tree (one redraw per batch).
     pending: Vec<(String, Vec<LineHit>)>,
     flush_armed: bool,
+    /// The tree (and `hits`) still show the previous query; swapped out on the first flush.
+    stale: bool,
+    /// Query highlighted in the editor and preview, set by opening a result.
+    pub mark: Option<Mark>,
+}
+
+struct SearchHit {
+    path: String,
+    line: usize,
+    /// Item label (UTF-16) and the matches in it, for highlighting.
+    label: Vec<u16>,
+    ranges: Vec<(usize, usize)>,
+}
+
+pub struct Mark {
+    query: String,
+    regex: bool,
+    case: bool,
+    pub re: regex::Regex,
+}
+
+/// Same semantics as the core's search (grep-regex uses the `regex` crate's syntax).
+fn search_regex(query: &str, regex: bool, case: bool) -> Option<regex::Regex> {
+    let pattern = if regex { query.to_string() } else { regex::escape(query) };
+    regex::RegexBuilder::new(&pattern).case_insensitive(!case).build().ok()
+}
+
+/// Item label for a hit, with the match byte ranges mapped to UTF-16 offsets in it.
+fn hit_label(h: &LineHit) -> (String, Vec<u16>, Vec<(usize, usize)>) {
+    let prefix = format!("{}:  ", h.line);
+    let text = format!("{prefix}{}", h.text);
+    let label: Vec<u16> = text.encode_utf16().collect();
+    let u16_at = |byte: usize| prefix.len() + h.text[..byte].encode_utf16().count();
+    let ranges = h.ranges.iter().filter(|(s, e)| h.text.is_char_boundary(*s) && h.text.is_char_boundary(*e)).map(|&(s, e)| (u16_at(s), u16_at(e))).collect();
+    (text, label, ranges)
 }
 
 impl SearchPanel {
@@ -255,6 +306,8 @@ impl SearchPanel {
             hits: Vec::new(),
             pending: Vec::new(),
             flush_armed: false,
+            stale: false,
+            mark: None,
         }
     }
 
@@ -353,6 +406,41 @@ fn custom_draw(nm: *const NMHDR, color_for: impl Fn(isize) -> Option<u32>) -> Op
     }
 }
 
+/// Paint the matches of a result line over the tree's own text: a mark-colored box, then the
+/// matched characters again on top. The label sits centered in its text rect.
+fn draw_hit_marks(cd: &NMTVCUSTOMDRAW, tree: HWND, hit: &SearchHit, mark: u32, fg: u32) {
+    let mut rc: RECT = unsafe { std::mem::zeroed() };
+    unsafe { *(&mut rc as *mut RECT as *mut HTREEITEM) = cd.nmcd.dwItemSpec as HTREEITEM };
+    if send(tree, TVM_GETITEMRECT, 1, &mut rc as *mut _ as isize) == 0 {
+        return;
+    }
+    let hdc = cd.nmcd.hdc;
+    let label = &hit.label;
+    unsafe {
+        let old = SelectObject(hdc, send(tree, WM_GETFONT, 0, 0) as HGDIOBJ);
+        let ext = |n: usize| {
+            let mut sz = SIZE { cx: 0, cy: 0 };
+            GetTextExtentPoint32W(hdc, label.as_ptr(), n as i32, &mut sz);
+            sz
+        };
+        let full = ext(label.len());
+        let x0 = rc.left + (rc.right - rc.left - full.cx) / 2;
+        let top = rc.top + (rc.bottom - rc.top - full.cy) / 2;
+        let brush = CreateSolidBrush(theme::cref(mark));
+        SetBkMode(hdc, TRANSPARENT as i32);
+        SetTextColor(hdc, theme::cref(fg));
+        for &(a, b) in &hit.ranges {
+            let (l, r) = (x0 + ext(a).cx, x0 + ext(b).cx);
+            let bg = RECT { left: l, top: top - 1, right: r, bottom: top + full.cy + 1 };
+            FillRect(hdc, &bg, brush);
+            let mut t = RECT { left: l, top: rc.top, right: r, bottom: rc.bottom };
+            DrawTextW(hdc, label[a..].as_ptr(), (b - a) as i32, &mut t, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_NOCLIP);
+        }
+        DeleteObject(brush as HGDIOBJ);
+        SelectObject(hdc, old);
+    }
+}
+
 impl App {
     pub fn tree_notify(&mut self, nm: *const NMHDR) -> Option<LRESULT> {
         let code = unsafe { (*nm).code };
@@ -444,22 +532,47 @@ impl App {
     }
 
     fn reset_results(&mut self) {
-        clear(self.search.tree);
-        self.search.hits.clear();
+        self.cancel_pending();
+        self.clear_results();
+    }
+
+    fn cancel_pending(&mut self) {
         self.search.pending.clear();
         self.search.flush_armed = false;
         unsafe { KillTimer(self.hwnd, T_SEARCH_FLUSH) };
     }
 
+    fn clear_results(&mut self) {
+        let tree = self.search.tree;
+        freeze(tree);
+        clear(tree);
+        thaw(tree);
+        self.search.hits.clear();
+        self.search.stale = false;
+    }
+
     pub fn run_search(&mut self) {
         let query = get_text(self.search.edit);
-        self.reset_results();
+        let (regex, case) = (self.search.regex, self.search.case);
+        if self.search.mark.as_ref().is_some_and(|m| (m.query.as_str(), m.regex, m.case) != (query.as_str(), regex, case)) {
+            self.search.mark = None;
+            self.apply_search_mark();
+        }
+        if query.is_empty() {
+            self.reset_results();
+        } else {
+            // Keep the old results on screen until the new ones arrive, then swap in one
+            // repaint: no empty flash, no scrollbar shrinking and growing back.
+            self.cancel_pending();
+            self.search.stale = true;
+        }
         self.search.status = if query.is_empty() { String::new() } else { "Searching…".into() };
         let hwnd = self.hwnd as usize;
         let res = self.core.search(&query, self.search.regex, self.search.case, move |ev| unsafe {
             PostMessageW(hwnd as HWND, WM_SEARCH, 0, Box::into_raw(Box::new(ev)) as isize);
         });
         if let Err(e) = res {
+            self.clear_results();
             self.search.status = e;
         }
         self.invalidate();
@@ -472,18 +585,21 @@ impl App {
             return;
         }
         let tree = self.search.tree;
-        send(tree, WM_SETREDRAW, 0, 0);
+        freeze(tree);
+        if self.search.stale {
+            clear(tree);
+            self.search.hits.clear();
+            self.search.stale = false;
+        }
         for (path, hits) in std::mem::take(&mut self.search.pending) {
-            let group = insert(tree, TVI_ROOT, &format!("{path}   ({})", hits.len()), 0, None);
+            let group = insert_state(tree, TVI_ROOT, &format!("{path}   ({})", hits.len()), 0, None, TVIS_EXPANDED);
             for h in hits {
-                self.search.hits.push((path.clone(), h.line as usize));
-                let text = format!("{}:  {}", h.line, h.text);
+                let (text, label, ranges) = hit_label(&h);
+                self.search.hits.push(SearchHit { path: path.clone(), line: h.line as usize, label, ranges });
                 insert(tree, group, &text, self.search.hits.len() as isize, None);
             }
-            send(tree, TVM_EXPAND, TVE_EXPAND as usize, group as isize);
         }
-        send(tree, WM_SETREDRAW, 1, 0);
-        unsafe { InvalidateRect(tree, std::ptr::null(), 1) };
+        thaw(tree);
     }
 
     pub fn on_search_event(&mut self, ev: SearchEvent) {
@@ -494,11 +610,17 @@ impl App {
                 self.search.pending.push((path, hits));
                 if !self.search.flush_armed {
                     self.search.flush_armed = true;
-                    unsafe { SetTimer(self.hwnd, T_SEARCH_FLUSH, 100, None) };
+                    // While old results still show, wait longer: most searches finish first
+                    // and land in a single swap.
+                    let ms = if self.search.stale { 300 } else { 100 };
+                    unsafe { SetTimer(self.hwnd, T_SEARCH_FLUSH, ms, None) };
                 }
             }
             SearchEvent::Done { gen, files, hits, ms, truncated } if gen == latest => {
                 self.flush_search_results();
+                if self.search.stale {
+                    self.clear_results(); // no matches
+                }
                 let s = |n: usize| if n == 1 { "" } else { "s" };
                 self.search.status = format!("{hits} result{} in {files} file{} · {ms} ms{}", s(hits), s(files), if truncated { " (truncated)" } else { "" });
                 self.invalidate();
@@ -527,8 +649,24 @@ impl App {
                 Some(0)
             }
             NM_CUSTOMDRAW => {
-                let dim = self.pal.fg_dim;
-                custom_draw(nm, |p| (p == 0).then_some(dim))
+                let cd = unsafe { &mut *(nm as *mut NMTVCUSTOMDRAW) };
+                let p = cd.nmcd.lItemlParam;
+                let hit = (p > 0).then(|| self.search.hits.get(p as usize - 1)).flatten().filter(|h| !h.ranges.is_empty());
+                Some(match cd.nmcd.dwDrawStage {
+                    CDDS_PREPAINT => CDRF_NOTIFYITEMDRAW,
+                    CDDS_ITEMPREPAINT if p == 0 => {
+                        cd.clrText = theme::cref(self.pal.fg_dim);
+                        CDRF_DODEFAULT
+                    }
+                    CDDS_ITEMPREPAINT if hit.is_some() => CDRF_NOTIFYPOSTPAINT,
+                    CDDS_ITEMPOSTPAINT => {
+                        if let Some(h) = hit {
+                            draw_hit_marks(cd, self.search.tree, h, self.pal.mark, self.pal.fg);
+                        }
+                        CDRF_DODEFAULT
+                    }
+                    _ => CDRF_DODEFAULT,
+                } as LRESULT)
             }
             _ => None,
         }
@@ -540,9 +678,25 @@ impl App {
             send(self.search.tree, TVM_EXPAND, TVE_TOGGLE as usize, item as isize);
             return;
         }
-        if let Some((path, line)) = self.search.hits.get(p as usize - 1).cloned() {
-            self.open_file(&path, Some(line));
+        let Some((path, line)) = self.search.hits.get(p as usize - 1).map(|h| (h.path.clone(), h.line)) else { return };
+        if self.search.mark.is_none() {
+            let (query, regex, case) = (get_text(self.search.edit), self.search.regex, self.search.case);
+            self.search.mark = search_regex(&query, regex, case).map(|re| Mark { query, regex, case, re });
+            // A newly opened file picks the mark up as it loads.
+            if self.current.as_deref() == Some(path.as_str()) {
+                self.apply_search_mark();
+            }
         }
+        self.open_file(&path, Some(line));
+    }
+
+    /// Show the search mark (or its absence) in the open file's editor and preview.
+    pub fn apply_search_mark(&mut self) {
+        if self.current.is_none() {
+            return;
+        }
+        self.editor.mark_matches(self.search.mark.as_ref().map(|m| &m.re));
+        self.refresh_preview(true);
     }
 
     // ---------------------------------------------------------------- outline

@@ -60,6 +60,17 @@ pub const SCI_REPLACETARGET: u32 = 2194;
 pub const SCI_REPLACETARGETRE: u32 = 2195;
 pub const SCI_SEARCHINTARGET: u32 = 2197;
 pub const SCI_SETSEARCHFLAGS: u32 = 2198;
+pub const SCI_INDICSETSTYLE: u32 = 2080;
+pub const SCI_INDICSETFORE: u32 = 2082;
+pub const SCI_SETINDICATORCURRENT: u32 = 2500;
+pub const SCI_INDICATORFILLRANGE: u32 = 2504;
+pub const SCI_INDICATORCLEARRANGE: u32 = 2505;
+pub const SCI_INDICSETUNDER: u32 = 2510;
+pub const SCI_INDICSETALPHA: u32 = 2523;
+pub const SCI_INDICSETOUTLINEALPHA: u32 = 2558;
+pub const INDIC_ROUNDBOX: usize = 7;
+/// Indicator for workspace-search matches (the first one free for containers).
+const IND_SEARCH: usize = 8;
 pub const SCI_VISIBLEFROMDOCLINE: u32 = 2220;
 pub const SCI_DOCLINEFROMVISIBLE: u32 = 2221;
 pub const SCI_SETMARGINTYPEN: u32 = 2240;
@@ -267,8 +278,23 @@ impl Editor {
         self.style(19, code, None, false, false); // `code`
         self.style(20, code, None, false, false); // ``code``
         self.style(21, code, None, false, false); // code block
+        self.msg(SCI_INDICSETSTYLE, IND_SEARCH, INDIC_ROUNDBOX as isize);
+        self.msg(SCI_INDICSETFORE, IND_SEARCH, cref(p.mark) as isize);
+        self.msg(SCI_INDICSETALPHA, IND_SEARCH, if p.dark { 200 } else { 160 });
+        self.msg(SCI_INDICSETOUTLINEALPHA, IND_SEARCH, 255);
+        self.msg(SCI_INDICSETUNDER, IND_SEARCH, 1);
         self.msg(SCI_COLOURISE, 0, -1);
         self.update_margin();
+    }
+
+    /// Mark every match of `re` (none: clear the marks).
+    pub fn mark_matches(&self, re: Option<&regex::Regex>) {
+        self.msg(SCI_SETINDICATORCURRENT, IND_SEARCH, 0);
+        self.msg(SCI_INDICATORCLEARRANGE, 0, self.msg(SCI_GETLENGTH, 0, 0));
+        let Some(re) = re else { return };
+        for m in re.find_iter(&self.text()).filter(|m| !m.is_empty()).take(10_000) {
+            self.msg(SCI_INDICATORFILLRANGE, m.start(), m.len() as isize);
+        }
     }
 
     /// Line-number margin wide enough for the line count.

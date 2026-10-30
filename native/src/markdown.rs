@@ -151,6 +151,33 @@ fn mark_wide_code(html: &str) -> String {
     .into_owned()
 }
 
+/// Wrap matches of `re` in the HTML's text (not in tags or entities) in `<span class="hit">`.
+/// Matches across inline formatting are not found.
+pub fn mark_matches(html: &str, re: &regex::Regex) -> String {
+    static TOKEN: OnceLock<regex::Regex> = OnceLock::new();
+    let token = TOKEN.get_or_init(|| regex::Regex::new(r"<[^>]*>|&[#a-zA-Z0-9]+;").unwrap());
+    let mut out = String::with_capacity(html.len() + html.len() / 8);
+    let mark_text = |out: &mut String, text: &str| {
+        let mut last = 0;
+        for m in re.find_iter(text).filter(|m| !m.is_empty()) {
+            out.push_str(&text[last..m.start()]);
+            out.push_str("<span class=\"hit\">");
+            out.push_str(m.as_str());
+            out.push_str("</span>");
+            last = m.end();
+        }
+        out.push_str(&text[last..]);
+    };
+    let mut last = 0;
+    for t in token.find_iter(html) {
+        mark_text(&mut out, &html[last..t.start()]);
+        out.push_str(t.as_str());
+        last = t.end();
+    }
+    mark_text(&mut out, &html[last..]);
+    out
+}
+
 /// Stylesheet for the preview, after the webview build's `.markdown-body` rules.
 pub fn css(p: &Palette) -> String {
     let c = |v: u32| format!("#{v:06x}");
@@ -198,6 +225,7 @@ li.task-list-item {{ list-style-type: none; }}
 del {{ text-decoration: line-through; }}
 .footnotes {{ font-size: 0.9em; color: {dim}; border-top: 1px solid {border}; padding-top: 0.5em; }}
 sup {{ font-size: 0.75em; vertical-align: super; line-height: 0; }}
+.hit {{ background: {mark}; border-radius: 3px; }}
 "#,
         bg = c(p.bg),
         fg = c(p.fg),
@@ -207,6 +235,7 @@ sup {{ font-size: 0.75em; vertical-align: super; line-height: 0; }}
         accent = c(p.accent),
         code_bg = c(p.code_bg),
         side = c(p.side),
+        mark = c(p.mark),
         code_measure = MEASURE_CHARS + 4,
     )
 }
@@ -298,6 +327,13 @@ mod tests {
         assert!(html.contains("<pre data-sourcepos=\"5:1-7:3\""), "{html}");
         assert!(html.contains("<span style=\"color:#"), "{html}");
         assert!(html.contains("\u{2611}") && html.contains("\u{2610}"), "{html}");
+    }
+
+    #[test]
+    fn marks_text_only() {
+        let re = regex::RegexBuilder::new("amp|a").case_insensitive(true).build().unwrap();
+        let html = mark_matches("<p class=\"a\">A &amp; b</p>", &re);
+        assert_eq!(html, "<p class=\"a\"><span class=\"hit\">A</span> &amp; b</p>");
     }
 
     #[test]

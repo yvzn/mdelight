@@ -911,6 +911,7 @@ impl App {
             self.dirty = false;
             self.loading = true;
             self.editor.set_text(&text);
+            self.editor.mark_matches(self.search.mark.as_ref().map(|m| &m.re));
             self.loading = false;
             self.recent.retain(|p| p != path);
             self.recent.insert(0, path.to_string());
@@ -1135,7 +1136,11 @@ impl App {
             return;
         }
         let t0 = Instant::now();
-        let html = markdown::page(&markdown::render(&self.editor.text(), self.pal.dark));
+        let mut body = markdown::render(&self.editor.text(), self.pal.dark);
+        if let Some(m) = &self.search.mark {
+            body = markdown::mark_matches(&body, &m.re);
+        }
+        let html = markdown::page(&body);
         let css = markdown::css(&self.pal);
         let base = root.join(dirname(&cur).replace('/', "\\"));
         let base_w = wide(&base.to_string_lossy());

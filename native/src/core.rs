@@ -16,6 +16,7 @@ use nucleo_matcher::{Config, Matcher, Utf32Str};
 const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_HITS: usize = 5000;
 const MAX_LINE_CHARS: usize = 240;
+const MAX_LINE_MATCHES: usize = 50;
 
 #[derive(Default)]
 struct WsState {
@@ -294,12 +295,14 @@ impl Core {
                                 &matcher,
                                 &path,
                                 sinks::Lossy(|lnum, line| {
-                                    let mut first = None;
+                                    let mut found = Vec::new();
                                     let _ = matcher.find_iter(line.as_bytes(), |m| {
-                                        first = Some((m.start(), m.end()));
-                                        false
+                                        if m.start() < m.end() {
+                                            found.push((m.start(), m.end()));
+                                        }
+                                        found.len() < MAX_LINE_MATCHES
                                     });
-                                    hits.push(make_hit(lnum, line, first));
+                                    hits.push(make_hit(lnum, line, &found));
                                     Ok(hits.len() < 200)
                                 }),
                             );
@@ -356,8 +359,8 @@ pub struct FileMatch {
 pub struct LineHit {
     pub line: u64,
     pub text: String,
-    /// Byte range of the first match in `text`.
-    pub range: Option<(usize, usize)>,
+    /// Byte ranges of the matches in `text`.
+    pub ranges: Vec<(usize, usize)>,
 }
 
 pub enum SearchEvent {
@@ -366,9 +369,9 @@ pub enum SearchEvent {
 }
 
 /// Trim a long line to a window around the first match.
-fn make_hit(line_no: u64, line: &str, first: Option<(usize, usize)>) -> LineHit {
+fn make_hit(line_no: u64, line: &str, found: &[(usize, usize)]) -> LineHit {
     let line = line.trim_end_matches(['\r', '\n']);
-    let first_start = first.map(|r| r.0).unwrap_or(0);
+    let first_start = found.first().map(|r| r.0).unwrap_or(0);
     let mut start = 0;
     if line.len() > MAX_LINE_CHARS * 2 && first_start > MAX_LINE_CHARS / 3 {
         start = first_start - MAX_LINE_CHARS / 3;
@@ -383,8 +386,8 @@ fn make_hit(line_no: u64, line: &str, first: Option<(usize, usize)>) -> LineHit 
     let lead = line[start..end].len() - line[start..end].trim_start().len();
     let start = start + lead;
     let text = &line[start..end];
-    let range = first.filter(|(s, e)| *s >= start && *e <= end).map(|(s, e)| (s - start, e - start));
-    LineHit { line: line_no, text: text.to_string(), range }
+    let ranges = found.iter().filter(|(s, e)| *s >= start && *e <= end).map(|(s, e)| (s - start, e - start)).collect();
+    LineHit { line: line_no, text: text.to_string(), ranges }
 }
 
 #[cfg(test)]
@@ -393,14 +396,14 @@ mod tests {
 
     #[test]
     fn hits_are_windowed() {
-        let h = make_hit(3, "  café needle\n", Some((8, 14)));
-        assert_eq!(h.text, "café needle");
-        assert_eq!(h.range, Some((6, 12)));
+        let h = make_hit(3, "  café needle needle\n", &[(8, 14), (15, 21)]);
+        assert_eq!(h.text, "café needle needle");
+        assert_eq!(h.ranges, vec![(6, 12), (13, 19)]);
 
         let long = format!("{}needle{}", "x".repeat(1000), "y".repeat(1000));
-        let h = make_hit(1, &long, Some((1000, 1006)));
+        let h = make_hit(1, &long, &[(1000, 1006)]);
         assert!(h.text.len() <= MAX_LINE_CHARS * 2);
-        let (s, e) = h.range.unwrap();
+        let (s, e) = h.ranges[0];
         assert_eq!(&h.text[s..e], "needle");
     }
 
