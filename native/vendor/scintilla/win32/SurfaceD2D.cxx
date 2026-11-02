@@ -1720,6 +1720,26 @@ TextLayout LayoutCreate(std::wstring_view wsv, IDWriteTextFormat *pTextFormat, F
 	if (FAILED(hr)) {
 		return {};
 	}
+	// MDelight patch: DirectWrite font fallback is per character, so in "1️⃣" the "1"
+	// stays in the monospace font and only the selector + keycap fall back, drawing a split
+	// keycap. Put whole emoji presentation sequences (base + U+FE0F / U+20E3) in the emoji font.
+	size_t base = 0;
+	size_t i = 0;
+	while (i < wsv.length()) {
+		if (wsv[i] == 0xFE0F || wsv[i] == 0x20E3) {
+			size_t end = i + 1;
+			while (end < wsv.length() && (wsv[end] == 0xFE0F || wsv[end] == 0x20E3)) {
+				end++;
+			}
+			const DWRITE_TEXT_RANGE range { static_cast<UINT32>(base), static_cast<UINT32>(end - base) };
+			layout->SetFontFamilyName(L"Segoe UI Emoji", range);
+			i = end;
+			continue;
+		}
+		base = i;
+		const bool pair = (wsv[i] >= 0xD800) && (wsv[i] <= 0xDBFF) && (i + 1 < wsv.length());
+		i += pair ? 2 : 1;
+	}
 	return layout;
 }
 
