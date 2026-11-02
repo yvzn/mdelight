@@ -13,6 +13,7 @@ mod help;
 mod markdown;
 mod mermaid;
 mod palette;
+mod scrim;
 mod panels;
 mod paste;
 mod sci;

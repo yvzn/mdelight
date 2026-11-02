@@ -367,7 +367,7 @@ unsafe extern "system" fn help_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
                 GdiFlush();
                 // GDI leaves alpha at 0: the backdrop key becomes a translucent black scrim
                 // (premultiplied, so only the alpha byte is set), everything else opaque.
-                let scrim: u32 = if pal.dark { 0x8c } else { 0x66 } << 24;
+                let scrim = (crate::scrim::alpha(pal.dark) as u32) << 24;
                 for px in std::slice::from_raw_parts_mut(bits as *mut u32, (w * h) as usize) {
                     *px = if *px & 0xffffff == BACKDROP_KEY { scrim } else { *px | 0xff00_0000 };
                 }

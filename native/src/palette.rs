@@ -46,6 +46,7 @@ pub struct PaletteUi {
     pub hwnd: HWND,
     edit: HWND,
     list: HWND,
+    scrim: HWND,
     pub open: bool,
     kind: Kind,
     items: Vec<Item>,
@@ -103,7 +104,10 @@ impl PaletteUi {
         unsafe {
             let inst = GetModuleHandleW(std::ptr::null());
             let cls = wide("MDelightPalette");
-            let hwnd = CreateWindowExW(0, cls.as_ptr(), std::ptr::null(), WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN, 0, 0, 10, 10, parent, std::ptr::null_mut(), inst, std::ptr::null());
+            // Layered (fully opaque) so DWM stacks it above the layered scrim: a plain child
+            // would be composed into the parent's surface, under every layered sibling.
+            let hwnd = CreateWindowExW(WS_EX_LAYERED, cls.as_ptr(), std::ptr::null(), WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN, 0, 0, 10, 10, parent, std::ptr::null_mut(), inst, std::ptr::null());
+            SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
             let edit = make_edit(hwnd, ID_PALETTE_EDIT, "");
             show(edit, true);
             let lb = wide("LISTBOX");
@@ -121,10 +125,16 @@ impl PaletteUi {
                 inst,
                 std::ptr::null(),
             );
+            let scrim = crate::scrim::create(parent, || {
+                let a = app();
+                a.palette.close();
+                a.restore_focus();
+            });
             PaletteUi {
                 hwnd,
                 edit,
                 list,
+                scrim,
                 open: false,
                 kind: Kind::Files,
                 items: Vec::new(),
@@ -182,6 +192,7 @@ impl PaletteUi {
             SetWindowPos(self.hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
             InvalidateRect(self.hwnd, std::ptr::null(), 1);
         }
+        crate::scrim::place(self.scrim, self.hwnd, self.pal.dark);
     }
 
     fn show_with(&mut self, kind: Kind, cue: &str, value: &str) {
@@ -208,6 +219,7 @@ impl PaletteUi {
         }
         self.open = false;
         show(self.hwnd, false);
+        show(self.scrim, false);
     }
 
     /// Focus left the palette (clicked elsewhere): close it.

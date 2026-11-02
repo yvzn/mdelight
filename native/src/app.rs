@@ -325,6 +325,7 @@ impl App {
             crate::findbar::register(inst);
             crate::palette::register(inst);
             crate::help::register(inst);
+            crate::scrim::register(inst);
             register_toast(inst);
 
             let settings = Settings::load();
