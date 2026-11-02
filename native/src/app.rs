@@ -524,6 +524,13 @@ impl App {
         l.panes = rect(main_left, bar, w, h);
         let mode = self.effective_mode();
         let has_doc = self.has_ws();
+        // Find only searches the source, so its strip sits over the editor alone; the preview
+        // keeps the same top so scroll sync lines up.
+        let find_h = FindBar::height(self.scale);
+        let show_find = self.find.visible && has_doc && mode != Mode::Preview;
+        if show_find {
+            l.panes.top += find_h;
+        }
         match mode {
             Mode::Code => {
                 l.editor = l.panes;
@@ -560,9 +567,8 @@ impl App {
         show(self.outline.tree, show_side && self.panel == Panel::Outline);
 
         if self.find.visible {
-            let r = self.find.rect_in(&l.editor, self.scale);
-            move_window(self.find.hwnd, &r);
-            show(self.find.hwnd, vis(&l.editor));
+            move_window(self.find.hwnd, &rect(l.editor.left, bar, l.editor.right, bar + find_h));
+            show(self.find.hwnd, show_find);
         }
         if self.help.open {
             self.help.place(&cr);
@@ -716,9 +722,14 @@ impl App {
                 p.text("\u{25CF}", &rect(tr.right + self.px(4.0), ty, tr.right + self.px(20.0), ty + ib), pal.fg_dim, self.fonts.small, LEFT_MID);
             }
         }
+        // Blank band over the preview, matching the find strip beside it.
+        if mode == Mode::Split && l.panes.top > l.toolbar.bottom {
+            p.fill(&rect(l.preview.left, l.toolbar.bottom, l.preview.right, l.panes.top), pal.bar);
+            p.fill(&rect(l.preview.left, l.panes.top - 1, l.preview.right, l.panes.top), pal.border_strong);
+        }
         // Divider between split panes.
         if mode == Mode::Split {
-            p.fill(&rect(l.editor.right, l.panes.top, l.editor.right + 1, l.panes.bottom), pal.border_strong);
+            p.fill(&rect(l.editor.right, l.toolbar.bottom, l.editor.right + 1, l.panes.bottom), pal.border_strong);
         }
         p.fill(&rect(tb.left, tb.bottom - 1, tb.right, tb.bottom), pal.border);
         if self.current.is_none() {

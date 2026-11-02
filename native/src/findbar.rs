@@ -1,4 +1,4 @@
-//! Find & replace bar over the editor (Ctrl+F; F3 / Shift+F3 to step through matches).
+//! Find & replace strip above the editor and preview (Ctrl+F; F3 / Shift+F3 to step through matches).
 
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::*;
@@ -84,18 +84,16 @@ impl FindBar {
         send(self.replace, WM_SETFONT, fonts.ui as usize, 1);
     }
 
-    pub fn rect_in(&self, editor: &RECT, scale: f32) -> RECT {
-        let w = ((430.0 * scale) as i32).min(editor.right - editor.left - (24.0 * scale) as i32);
-        let h = (72.0 * scale) as i32;
-        let right = editor.right - (24.0 * scale) as i32;
-        let top = editor.top + (6.0 * scale) as i32;
-        rect(right - w, top, right, top + h)
+    /// Height of the strip; it spans the panes' full width and pushes them down.
+    pub fn height(scale: f32) -> i32 {
+        (72.0 * scale) as i32
     }
 
     fn layout(&mut self) {
-        let r = client_rect(self.hwnd);
         let s = dpi_scale(self.hwnd);
         let px = |v: f32| (v * s) as i32;
+        let mut r = client_rect(self.hwnd);
+        r.right = r.right.min(px(560.0)); // keep the fields and buttons together on wide windows
         let row = px(30.0);
         let b = px(26.0);
         let (y1, y2) = (px(4.0), px(4.0) + row + px(2.0));
@@ -139,7 +137,7 @@ impl FindBar {
             let pal = &self.pal;
             let a = app();
             p.fill(&r, pal.bar);
-            p.frame(&r, pal.border_strong);
+            p.fill(&rect(r.left, r.bottom - 1, r.right, r.bottom), pal.border_strong);
             for e in [self.find, self.replace] {
                 let mut er: RECT = std::mem::zeroed();
                 GetWindowRect(e, &mut er);
@@ -250,6 +248,7 @@ impl App {
     pub fn hide_find(&mut self) {
         self.find.visible = false;
         show(self.find.hwnd, false);
+        self.layout();
         self.editor.focus();
     }
 
