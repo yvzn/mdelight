@@ -20,6 +20,7 @@ use crate::ffi::{self, PvAnchor};
 use crate::findbar::FindBar;
 use crate::markdown::{self, Heading};
 use crate::mermaid;
+use crate::help::HelpUi;
 use crate::palette::PaletteUi;
 use crate::paste;
 use crate::panels::{OutlinePanel, SearchPanel, TreePanel};
@@ -148,6 +149,7 @@ pub struct App {
     pub search: SearchPanel,
     pub outline: OutlinePanel,
     pub palette: PaletteUi,
+    pub help: HelpUi,
     pub find: FindBar,
     rename_edit: HWND,
     toast: HWND,
@@ -322,6 +324,7 @@ impl App {
             RegisterClassExW(&wc);
             crate::findbar::register(inst);
             crate::palette::register(inst);
+            crate::help::register(inst);
             register_toast(inst);
 
             let settings = Settings::load();
@@ -361,6 +364,7 @@ impl App {
                 search: SearchPanel::create(hwnd),
                 outline: OutlinePanel::create(hwnd),
                 palette: PaletteUi::create(hwnd),
+                help: HelpUi::create(hwnd),
                 find: FindBar::create(hwnd),
                 rename_edit: make_edit(hwnd, ID_RENAME_EDIT, ""),
                 toast: create_toast(hwnd),
@@ -423,6 +427,7 @@ impl App {
         self.search.on_dpi(self.scale, &self.fonts);
         self.outline.on_dpi(self.scale, &self.fonts);
         self.palette.on_dpi(&self.fonts);
+        self.help.on_dpi(self.scale);
         self.find.on_dpi(&self.fonts);
         send(self.rename_edit, WM_SETFONT, self.fonts.ui as usize, 1);
         self.editor.update_margin();
@@ -557,6 +562,9 @@ impl App {
             let r = self.find.rect_in(&l.editor, self.scale);
             move_window(self.find.hwnd, &r);
             show(self.find.hwnd, vis(&l.editor));
+        }
+        if self.help.open {
+            self.help.place(&cr);
         }
         if self.palette.open {
             let r = self.palette.rect_in(&cr, self.scale);
@@ -1294,15 +1302,14 @@ impl App {
         self.layout();
     }
 
-    fn help(&self) {
-        let text = "Files & folders\n  Ctrl+Shift+O\tOpen folder\n  Ctrl+N\tNew file\n  F2\tRename / move file\n  Ctrl+S\tSave now (autosave is on)\n\n\
-Navigate\n  Ctrl+P / Ctrl+O\tGo to file\n  Ctrl+R\tGo to heading\n  Ctrl+Shift+F\tSearch in all files\n  Ctrl+Shift+E\tShow file list\n\n\
-View\n  Ctrl+1 / 2 / 3\tCode / Split / Preview\n  Ctrl+B\tShow / hide sidebar\n  Ctrl+Shift+L\tSwitch light / dark\n  F1\tThis help\n\n\
-Editor\n  Ctrl+F\tFind & replace in file\n  F3 / Shift+F3\tNext / previous match\n  Ctrl+Alt+G\tGo to line\n  Ctrl+D\tSelect next occurrence\n  Ctrl+Z / Ctrl+Y\tUndo / redo\n  Alt+↑ / ↓\tMove line up / down\n  Ctrl+Shift+D\tDuplicate line\n  Shift+Alt+arrows\tColumn (block) selection\n  Ctrl+Shift+K\tDelete line\n  Ctrl+] / [\tIndent / outdent\n  Ctrl+/\tToggle comment\n  Ctrl+V\tPaste (web, Word, images as Markdown)\n  Ctrl+Shift+V\tPaste as plain text\n  Ctrl+Shift+C\tCopy as rich text (HTML)\n\n\
-Preview\n  Drag\tSelect text (by word), Ctrl+C to copy\n  Right-click\tCopy code / link / paragraph\n  Double-click image\tOpen it\n  Double-click diagram\tView it in the browser";
-        let t = wide(text);
-        let c = wide("Keyboard shortcuts");
-        unsafe { MessageBoxW(self.hwnd, t.as_ptr(), c.as_ptr(), MB_OK) };
+    fn toggle_help(&mut self) {
+        if self.help.open {
+            self.help.close();
+            self.restore_focus();
+        } else {
+            self.palette.close();
+            self.help.show(&client_rect(self.hwnd));
+        }
     }
 
     // ---------------------------------------------------------------- keyboard
@@ -1316,8 +1323,13 @@ Preview\n  Drag\tSelect text (by word), Ctrl+C to copy\n  Right-click\tCopy code
         let down = |vk: VIRTUAL_KEY| unsafe { GetKeyState(vk as i32) } < 0;
         let (ctrl, shift, alt) = (down(VK_CONTROL), down(VK_SHIFT), down(VK_MENU));
         if key == VK_F1 {
-            self.help();
+            self.toggle_help();
             return true;
+        }
+        // Any other app shortcut acts on the window behind the help sheet, so drop it first.
+        if self.help.open && (ctrl || key == VK_F2 || key == VK_F3) {
+            self.help.close();
+            self.restore_focus();
         }
         if key == VK_F2 && !ctrl && !shift && !alt {
             self.start_rename();
@@ -1685,6 +1697,7 @@ Preview\n  Drag\tSelect text (by word), Ctrl+C to copy\n  Right-click\tCopy code
             }
             WM_CHECK_FOCUS => {
                 self.palette.check_focus();
+                self.help.check_focus();
                 Some(0)
             }
             ffi::PVN_SCROLL => {

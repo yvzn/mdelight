@@ -9,6 +9,7 @@ mod crash;
 mod ffi;
 mod findbar;
 mod fuzzy;
+mod help;
 mod markdown;
 mod mermaid;
 mod palette;
