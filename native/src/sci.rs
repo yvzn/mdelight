@@ -73,6 +73,32 @@ pub const SCI_INDICSETOUTLINEALPHA: u32 = 2558;
 pub const INDIC_ROUNDBOX: usize = 7;
 /// Indicator for workspace-search matches (the first one free for containers).
 const IND_SEARCH: usize = 8;
+/// Indicator for clickable URLs (Ctrl+click opens them).
+const IND_URL: usize = 9;
+const INDIC_PLAIN: isize = 0;
+
+/// Byte ranges of the http(s) URLs in `text`, without trailing punctuation.
+pub fn url_ranges(text: &str) -> Vec<(usize, usize)> {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = RE.get_or_init(|| regex::Regex::new(r#"(?i)\bhttps?://[^\s<>"'`\[\]]+"#).unwrap());
+    let mut out = Vec::new();
+    for m in re.find_iter(text) {
+        let mut u = m.as_str();
+        loop {
+            let trimmed = u.trim_end_matches(['.', ',', ';', ':', '!', '?', '*', '_', '~']);
+            let trimmed = if trimmed.ends_with(')') && trimmed.matches(')').count() > trimmed.matches('(').count() { &trimmed[..trimmed.len() - 1] } else { trimmed };
+            if trimmed.len() == u.len() {
+                break;
+            }
+            u = trimmed;
+        }
+        // Bare scheme with nothing after it is not a link.
+        if u.len() > u.find("://").map_or(0, |i| i + 3) {
+            out.push((m.start(), m.start() + u.len()));
+        }
+    }
+    out
+}
 pub const SCI_VISIBLEFROMDOCLINE: u32 = 2220;
 pub const SCI_DOCLINEFROMVISIBLE: u32 = 2221;
 pub const SCI_SETMARGINTYPEN: u32 = 2240;
@@ -117,6 +143,16 @@ pub const SCI_SETELEMENTCOLOUR: u32 = 2753;
 pub const SCI_COLOURISE: u32 = 4003;
 pub const SCI_SETILEXER: u32 = 4033;
 
+pub const SCN_DWELLSTART: u32 = 2016;
+pub const SCN_DWELLEND: u32 = 2017;
+const SCI_POSITIONFROMPOINTCLOSE: u32 = 2023;
+const SCI_SETMOUSEDWELLTIME: u32 = 2264;
+const SCI_CALLTIPSHOW: u32 = 2200;
+const SCI_CALLTIPCANCEL: u32 = 2201;
+const SCI_CALLTIPSETPOSITION: u32 = 2213;
+const SCI_INDICATORVALUEAT: u32 = 2507;
+pub const SCN_INDICATORCLICK: u32 = 2023;
+pub const SCMOD_CTRL_FLAG: i32 = 2;
 pub const SCN_UPDATEUI: u32 = 2007;
 pub const SCN_MODIFIED: u32 = 2008;
 pub const SC_UPDATE_V_SCROLL: i32 = 0x4;
@@ -163,6 +199,29 @@ pub struct SCNotification {
     pub character_source: i32,
 }
 
+/// Pointing-hand cursor while the mouse is over a URL.
+unsafe extern "system" fn editor_subclass(h: HWND, msg: u32, wp: usize, lp: isize, _id: usize, _: usize) -> isize {
+    use windows_sys::Win32::Foundation::POINT;
+    // Scintilla sets its own cursor on every WM_MOUSEMOVE and WM_SETCURSOR, so the hand has
+    // to be applied after both or the two fight. Query the point the message carries/the cursor.
+    let over_url = |h: HWND| {
+        let mut pt = POINT { x: 0, y: 0 };
+        GetCursorPos(&mut pt);
+        windows_sys::Win32::Graphics::Gdi::ScreenToClient(h, &mut pt);
+        let pos = send(h, SCI_POSITIONFROMPOINTCLOSE, pt.x as usize, pt.y as isize);
+        pos >= 0 && send(h, SCI_INDICATORVALUEAT, IND_URL, pos) != 0
+    };
+    if msg == WM_SETCURSOR && (lp & 0xffff) as u32 == HTCLIENT && over_url(h) {
+        SetCursor(LoadCursorW(std::ptr::null_mut(), IDC_HAND));
+        return 1;
+    }
+    let r = windows_sys::Win32::UI::Shell::DefSubclassProc(h, msg, wp, lp);
+    if msg == WM_MOUSEMOVE && over_url(h) {
+        SetCursor(LoadCursorW(std::ptr::null_mut(), IDC_HAND));
+    }
+    r
+}
+
 pub struct Editor {
     pub hwnd: HWND,
 }
@@ -176,8 +235,26 @@ impl Editor {
             let hwnd = CreateWindowExW(0, cls.as_ptr(), std::ptr::null(), WS_CHILD | WS_TABSTOP | WS_CLIPSIBLINGS, 0, 0, 100, 100, parent, std::ptr::null_mut(), inst, std::ptr::null());
             let e = Editor { hwnd };
             e.setup();
+            windows_sys::Win32::UI::Shell::SetWindowSubclass(hwnd, Some(editor_subclass), 1, 0);
             e
         }
+    }
+
+    /// Whether the client point (x, y) sits on a marked URL.
+    pub fn url_under(&self, x: i32, y: i32) -> bool {
+        let pos = self.msg(SCI_POSITIONFROMPOINTCLOSE, x as usize, y as isize);
+        pos >= 0 && self.msg(SCI_INDICATORVALUEAT, IND_URL, pos) != 0
+    }
+
+    pub fn show_url_tip(&self, x: i32, y: i32) {
+        if self.url_under(x, y) {
+            let pos = self.msg(SCI_POSITIONFROMPOINTCLOSE, x as usize, y as isize);
+            self.msg(SCI_CALLTIPSHOW, pos as usize, c"Ctrl + Click to open".as_ptr() as isize);
+        }
+    }
+
+    pub fn hide_tip(&self) {
+        self.msg(SCI_CALLTIPCANCEL, 0, 0);
     }
 
     pub fn msg(&self, m: u32, wp: usize, lp: isize) -> isize {
@@ -206,6 +283,8 @@ impl Editor {
         self.msg(SCI_SETMULTIPLESELECTION, 1, 0);
         self.msg(SCI_SETADDITIONALSELECTIONTYPING, 1, 0);
         self.msg(SCI_SETYCARETPOLICY, 0x01 | 0x04 | 0x08, 3); // slop | strict | even
+        self.msg(SCI_SETMOUSEDWELLTIME, 400, 0);
+        self.msg(SCI_CALLTIPSETPOSITION, 1, 0); // above the line, clear of the mouse cursor
         self.msg(SCI_SETMODEVENTMASK, (SC_MOD_INSERTTEXT | SC_MOD_DELETETEXT) as usize, 0);
         self.msg(SCI_SETILEXER, 0, unsafe { ffi::md_create_lexer() } as isize);
 
@@ -288,8 +367,26 @@ impl Editor {
         self.msg(SCI_INDICSETALPHA, IND_SEARCH, if p.dark { 200 } else { 160 });
         self.msg(SCI_INDICSETOUTLINEALPHA, IND_SEARCH, 255);
         self.msg(SCI_INDICSETUNDER, IND_SEARCH, 1);
+        self.msg(SCI_INDICSETSTYLE, IND_URL, INDIC_PLAIN);
+        self.msg(SCI_INDICSETFORE, IND_URL, cref(p.accent) as isize);
         self.msg(SCI_COLOURISE, 0, -1);
+        self.mark_urls();
         self.update_margin();
+    }
+
+    /// Underline every URL so it reads as a link; Ctrl+click opens it.
+    pub fn mark_urls(&self) {
+        self.msg(SCI_SETINDICATORCURRENT, IND_URL, 0);
+        self.msg(SCI_INDICATORCLEARRANGE, 0, self.msg(SCI_GETLENGTH, 0, 0));
+        for (s, e) in url_ranges(&self.text()) {
+            self.msg(SCI_INDICATORFILLRANGE, s, (e - s) as isize);
+        }
+    }
+
+    /// The URL under byte position `pos`, if any.
+    pub fn url_at(&self, pos: usize) -> Option<String> {
+        let text = self.text();
+        url_ranges(&text).into_iter().find(|&(s, e)| pos >= s && pos <= e).map(|(s, e)| text[s..e].to_string())
     }
 
     /// Mark every match of `re` (none: clear the marks).
@@ -549,5 +646,22 @@ impl Editor {
         self.msg(SCI_SETTARGETRANGE, a, b as isize);
         self.msg(SCI_REPLACETARGET, out.len(), out.as_ptr() as isize);
         self.msg(SCI_SETSEL, a, (a + out.len()) as isize);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::url_ranges;
+
+    fn urls(t: &str) -> Vec<&str> {
+        url_ranges(t).into_iter().map(|(s, e)| &t[s..e]).collect()
+    }
+
+    #[test]
+    fn finds_and_trims_urls() {
+        assert_eq!(urls("see https://a.com/x, and (http://b.org/y_(z))."), ["https://a.com/x", "http://b.org/y_(z)"]);
+        assert_eq!(urls("[t](https://a.com/p) **https://c.io**"), ["https://a.com/p", "https://c.io"]);
+        assert_eq!(urls("<https://a.com?q=1&b=2>"), ["https://a.com?q=1&b=2"]);
+        assert!(urls("http:// nothing, ftp://x").is_empty());
     }
 }

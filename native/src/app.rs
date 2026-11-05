@@ -1258,6 +1258,13 @@ impl App {
         }
     }
 
+    /// Hand a URL to the default handler (browser, mail client).
+    fn open_external(&self, url: &str) {
+        let w = wide(url);
+        let op = wide("open");
+        unsafe { ShellExecuteW(self.hwnd, op.as_ptr(), w.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL) };
+    }
+
     fn on_link(&mut self, href: &str) {
         if let Some(id) = href.strip_prefix('#') {
             let id = CString::new(percent_decode(id)).unwrap_or_default();
@@ -1270,9 +1277,7 @@ impl App {
         }
         let lower = href.to_lowercase();
         if lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("mailto:") {
-            let w = wide(href);
-            let op = wide("open");
-            unsafe { ShellExecuteW(self.hwnd, op.as_ptr(), w.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL) };
+            self.open_external(href);
             return;
         }
         if lower.split_once(':').is_some_and(|(s, _)| s.len() > 1 && s.chars().all(|c| c.is_ascii_alphanumeric() || "+.-".contains(c))) {
@@ -1518,7 +1523,17 @@ impl App {
         if hdr.hwndFrom == self.editor.hwnd {
             let n = unsafe { &*(nm as *const sci::SCNotification) };
             match n.code {
-                sci::SCN_MODIFIED if n.modification_type & (sci::SC_MOD_INSERTTEXT | sci::SC_MOD_DELETETEXT) != 0 => self.on_change(),
+                sci::SCN_MODIFIED if n.modification_type & (sci::SC_MOD_INSERTTEXT | sci::SC_MOD_DELETETEXT) != 0 => {
+                    self.editor.mark_urls();
+                    self.on_change();
+                }
+                sci::SCN_DWELLSTART => self.editor.show_url_tip(n.x, n.y),
+                sci::SCN_DWELLEND => self.editor.hide_tip(),
+                sci::SCN_INDICATORCLICK if n.modifiers & sci::SCMOD_CTRL_FLAG != 0 => {
+                    if let Some(url) = self.editor.url_at(n.position.max(0) as usize) {
+                        self.open_external(&url);
+                    }
+                }
                 sci::SCN_UPDATEUI if n.updated & sci::SC_UPDATE_V_SCROLL != 0 => self.on_editor_scroll(),
                 _ => {}
             }

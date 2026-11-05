@@ -31,6 +31,7 @@ const SECTIONS: &[(&str, usize, &[(&str, &str)])] = &[
             ("Duplicate line", "Ctrl+Shift+D"),
             ("Delete line", "Ctrl+Shift+K"),
             ("Column (block) selection", "Shift+Alt+Arrows"),
+            ("Open URL under cursor", "Ctrl+Click"),
             ("Indent / outdent", "Ctrl+] / ["),
             ("Toggle comment", "Ctrl+/"),
             ("Paste web, Word, images as Markdown", "Ctrl+V"),
