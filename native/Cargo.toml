@@ -1,6 +1,6 @@
 [package]
 name = "mdelight-native"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
 description = "MDelight, 100% native Win32 build: Scintilla editor + litehtml preview"
 
