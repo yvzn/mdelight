@@ -108,6 +108,8 @@ struct Font {
 	int decoration = 0;
 	web_color deco_color;
 	std::unordered_map<std::string, float> widths;
+	// Shaped words for drawing: DrawText would reshape each one on every repaint (drag-selecting).
+	std::unordered_map<std::string, IDWriteTextLayout*> layouts;
 };
 
 /// Fonts outlive documents: the preview re-parses on every edit, and measuring is the slow part.
@@ -166,6 +168,23 @@ static float measure(Font* f, const char* text) {
 		f->widths.clear();
 	f->widths.emplace(text, width);
 	return width;
+}
+
+static IDWriteTextLayout* text_layout(Font* f, const char* text) {
+	auto it = f->layouts.find(text);
+	if (it != f->layouts.end())
+		return it->second;
+	std::wstring w = widen(text);
+	IDWriteTextLayout* lay = nullptr;
+	if (w.empty() || FAILED(g_dw->CreateTextLayout(w.c_str(), (UINT32)w.size(), f->fmt, 100000.f, 1000.f, &lay)))
+		return nullptr;
+	if (f->layouts.size() > 10000) {
+		for (auto& [_, l] : f->layouts)
+			l->Release();
+		f->layouts.clear();
+	}
+	f->layouts.emplace(text, lay);
+	return lay;
 }
 
 // ---------------------------------------------------------------- container
@@ -321,11 +340,9 @@ public:
 	void draw_text(uint_ptr hdc, const char* text, uint_ptr hFont, web_color color, const position& pos) override {
 		auto rt = (ID2D1RenderTarget*)hdc;
 		Font* f = (Font*)hFont;
-		std::wstring w = widen(text);
 		set_brush(color);
-		if (!w.empty())
-			rt->DrawText(w.c_str(), (UINT32)w.size(), f->fmt, D2D1::RectF(pos.x, pos.y, pos.x + pos.width + 1000.f, pos.y + pos.height + 100.f), brush,
-						 D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
+		if (auto lay = text_layout(f, text))
+			rt->DrawTextLayout(D2D1::Point2F(pos.x, pos.y), lay, brush, D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
 		if (f->decoration) {
 			if (!f->deco_color.is_current_color)
 				set_brush(f->deco_color);
@@ -678,6 +695,10 @@ static int caret_at(Preview* p, float x, float y) {
 	auto& items = text_items(p);
 	int n = 0;
 	for (int i = 0; i < (int)items.size(); i++) {
+		// Line breaks in <pre> have zero height, so `bottom() <= y` would hold anywhere on their line
+		// and drag the caret to the line's end. They count only when a later item does.
+		if (items[i].el->is_break())
+			continue;
 		const auto& b = items[i].box;
 		bool before = b.bottom() <= y || (b.y <= y && b.x + b.width / 2 <= x);
 		if (before)
@@ -1320,8 +1341,12 @@ static LRESULT CALLBACK preview_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
 					scroll_to(p, p->sx, p->sy - 20, true);
 				else if (pt.y > (LONG)(p->c.vh * s))
 					scroll_to(p, p->sx, p->sy + 20, true);
-				p->sel_b = caret_at(p, pt.x / s + p->sx, pt.y / s + p->sy);
-				InvalidateRect(hwnd, nullptr, FALSE);
+				// Selection moves by whole words: repaint only when the caret changes.
+				int b = caret_at(p, pt.x / s + p->sx, pt.y / s + p->sy);
+				if (b != p->sel_b) {
+					p->sel_b = b;
+					InvalidateRect(hwnd, nullptr, FALSE);
+				}
 				return 0;
 			}
 		}
