@@ -263,6 +263,40 @@ fn interpolate(anchors: &[PvAnchor], value: f64, by_line: bool) -> f64 {
     val(a) + t * (val(b) - val(a))
 }
 
+/// Ctrl+Backspace in a single-line edit: remove the selection, or the word before the caret
+/// (trailing spaces, then a run of word characters or a run of punctuation), like the editor does.
+fn delete_word_back(h: HWND) {
+    let (mut start, mut end) = (0u32, 0u32);
+    send(h, EM_GETSEL, &mut start as *mut u32 as usize, &mut end as *mut u32 as isize);
+    if start == end {
+        let text: Vec<u16> = get_text(h).encode_utf16().collect();
+        let class = |c: u16| -> u8 {
+            match char::from_u32(c as u32) {
+                Some(ch) if ch.is_whitespace() => 0,
+                Some(ch) if ch.is_alphanumeric() || ch == '_' => 1,
+                _ => 2,
+            }
+        };
+        let mut i = (start as usize).min(text.len());
+        while i > 0 && class(text[i - 1]) == 0 {
+            i -= 1;
+        }
+        if i > 0 {
+            let k = class(text[i - 1]);
+            while i > 0 && class(text[i - 1]) == k {
+                i -= 1;
+            }
+        }
+        start = i as u32;
+    }
+    if start == end {
+        return;
+    }
+    send(h, EM_SETSEL, start as usize, end as isize);
+    let empty = [0u16];
+    send(h, EM_REPLACESEL, 1, empty.as_ptr() as isize);
+}
+
 unsafe extern "system" fn edit_subclass(h: HWND, msg: u32, wp: WPARAM, lp: LPARAM, id: usize, _: usize) -> LRESULT {
     match msg {
         WM_KEYDOWN => {
@@ -270,8 +304,13 @@ unsafe extern "system" fn edit_subclass(h: HWND, msg: u32, wp: WPARAM, lp: LPARA
                 return 0;
             }
         }
-        // Swallow the beeps single-line edits make for Enter/Esc, and Ctrl+Backspace's box glyph.
-        WM_CHAR if wp == 13 || wp == 27 || wp == 0x7f => return 0,
+        // Ctrl+Backspace arrives as DEL (0x7f): the stock edit control inserts a box glyph, so delete the word ourselves.
+        WM_CHAR if wp == 0x7f => {
+            delete_word_back(h);
+            return 0;
+        }
+        // Swallow the beeps single-line edits make for Enter/Esc.
+        WM_CHAR if wp == 13 || wp == 27 => return 0,
         WM_GETDLGCODE => return DLGC_WANTALLKEYS as LRESULT,
         _ => {}
     }
