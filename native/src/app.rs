@@ -14,6 +14,7 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
 use windows_sys::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass, ShellExecuteW};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
+use crate::codehl::CodeColours;
 use crate::copy;
 use crate::core::{Core, SearchEvent, WatchEvent};
 use crate::ffi::{self, PvAnchor};
@@ -40,6 +41,7 @@ const T_TOAST: usize = 4;
 const T_LOCK: usize = 5;
 pub const T_SEARCH: usize = 6;
 const T_SNAPSHOT: usize = 7;
+const T_CODE: usize = 9;
 pub const T_SEARCH_FLUSH: usize = 8;
 
 pub const ID_SEARCH_EDIT: usize = 101;
@@ -144,6 +146,7 @@ pub struct App {
     pub input_brush: HBRUSH,
 
     pub editor: Editor,
+    code_colours: CodeColours,
     pub preview: HWND,
     pub tree: TreePanel,
     pub search: SearchPanel,
@@ -360,6 +363,7 @@ impl App {
                 fonts: Fonts::new(scale),
                 input_brush: std::ptr::null_mut(),
                 editor,
+                code_colours: CodeColours::default(),
                 preview,
                 tree: TreePanel::create(hwnd),
                 search: SearchPanel::create(hwnd),
@@ -446,6 +450,7 @@ impl App {
             self.input_brush = CreateSolidBrush(theme::cref(self.pal.input_bg));
         }
         self.editor.apply_theme(&self.pal);
+        self.code_colours.paint(&self.editor, dark);
         theme::set_control_theme(self.editor.hwnd, dark);
         theme::set_control_theme(self.preview, dark);
         self.tree.apply_theme(&self.pal);
@@ -945,6 +950,7 @@ impl App {
             self.dirty = false;
             self.loading = true;
             self.editor.set_text(&text);
+            self.code_colours.paint(&self.editor, self.pal.dark);
             self.editor.mark_matches(self.search.mark.as_ref().map(|m| &m.re));
             self.loading = false;
             self.recent.retain(|p| p != path);
@@ -1525,6 +1531,7 @@ impl App {
             match n.code {
                 sci::SCN_MODIFIED if n.modification_type & (sci::SC_MOD_INSERTTEXT | sci::SC_MOD_DELETETEXT) != 0 => {
                     self.editor.mark_urls();
+                    unsafe { SetTimer(self.hwnd, T_CODE, 150, None) };
                     self.on_change();
                 }
                 sci::SCN_DWELLSTART => self.editor.show_url_tip(n.x, n.y),
@@ -1680,6 +1687,10 @@ impl App {
                         unsafe { KillTimer(self.hwnd, T_OUTLINE) };
                         self.update_outline();
                         self.track_top();
+                    }
+                    T_CODE => {
+                        unsafe { KillTimer(self.hwnd, T_CODE) };
+                        self.code_colours.paint(&self.editor, self.pal.dark);
                     }
                     T_TOAST => {
                         unsafe { KillTimer(self.hwnd, T_TOAST) };

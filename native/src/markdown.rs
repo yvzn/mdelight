@@ -8,7 +8,7 @@ use std::sync::OnceLock;
 use comrak::adapters::SyntaxHighlighterAdapter;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{FontStyle, Theme, ThemeSet};
-use syntect::parsing::SyntaxSet;
+use syntect::parsing::{SyntaxDefinition, SyntaxReference, SyntaxSet};
 use syntect::util::LinesWithEndings;
 
 use crate::theme::Palette;
@@ -18,7 +18,21 @@ fn syntaxes() -> &'static SyntaxSet {
     S.get_or_init(SyntaxSet::load_defaults_newlines)
 }
 
-fn theme(dark: bool) -> &'static Theme {
+/// Grammars syntect doesn't bundle, kept in their own small set: adding them to the bundled
+/// one means relinking all 75 grammars (~200 ms) before the first block can be coloured.
+fn extra_syntaxes() -> &'static SyntaxSet {
+    static S: OnceLock<SyntaxSet> = OnceLock::new();
+    S.get_or_init(|| {
+        let mut b = syntect::parsing::SyntaxSetBuilder::new();
+        let ps = include_str!("syntaxes/PowerShell.sublime-syntax");
+        if let Ok(def) = SyntaxDefinition::load_from_str(ps, true, None) {
+            b.add(def);
+        }
+        b.build()
+    })
+}
+
+pub(crate) fn theme(dark: bool) -> &'static Theme {
     static T: OnceLock<ThemeSet> = OnceLock::new();
     let set = T.get_or_init(ThemeSet::load_defaults);
     &set.themes[if dark { "base16-ocean.dark" } else { "InspiredGitHub" }]
@@ -49,6 +63,24 @@ fn write_tag(out: &mut dyn Write, tag: &str, attrs: HashMap<&'static str, Cow<'_
     out.write_char('>')
 }
 
+/// The grammar for a fence's info string (its first word), shared with the editor's code colours.
+/// Returns the grammar with the set it belongs to (highlighting needs both).
+pub(crate) fn find_syntax(info: &str) -> Option<(&'static SyntaxReference, &'static SyntaxSet)> {
+    let lang = info.split([',', ' ', '{']).next().unwrap_or("");
+    // syntect's bundled grammars have no TypeScript; JavaScript colors it well enough.
+    let lang = match lang.to_lowercase().as_str() {
+        "ts" | "tsx" | "typescript" | "jsx" | "mjs" => "js",
+        "sh" | "shell" | "zsh" => "bash",
+        "csharp" | "c#" | "cs" => "cs",
+        "powershell" | "pwsh" | "ps" | "ps1" => "ps1",
+        _ => lang,
+    };
+    if lang.is_empty() {
+        return None;
+    }
+    [syntaxes(), extra_syntaxes()].into_iter().find_map(|ss| ss.find_syntax_by_token(lang).map(|s| (s, ss)))
+}
+
 /// Inline-styled syntax highlighting (litehtml handles inline styles fine, and the preview is
 /// re-rendered on theme changes anyway). Keeps comrak's `data-sourcepos` on `<pre>` for scroll sync.
 struct Highlighter {
@@ -57,16 +89,7 @@ struct Highlighter {
 
 impl SyntaxHighlighterAdapter for Highlighter {
     fn write_highlighted(&self, out: &mut dyn Write, lang: Option<&str>, code: &str) -> fmt::Result {
-        let lang = lang.unwrap_or("").split([',', ' ']).next().unwrap_or("");
-        // syntect's bundled grammars have no TypeScript; JavaScript colors it well enough.
-        let lang = match lang.to_lowercase().as_str() {
-            "ts" | "tsx" | "typescript" | "jsx" | "mjs" => "js",
-            "sh" | "shell" | "zsh" => "bash",
-            _ => lang,
-        };
-        let ss = syntaxes();
-        let syntax = (!lang.is_empty()).then(|| ss.find_syntax_by_token(lang)).flatten();
-        let Some(syntax) = syntax else { return escape(out, code) };
+        let Some((syntax, ss)) = find_syntax(lang.unwrap_or("")) else { return escape(out, code) };
         let mut h = HighlightLines::new(syntax, theme(self.dark));
         for line in LinesWithEndings::from(code) {
             let Ok(regions) = h.highlight_line(line, ss) else { return escape(out, line) };

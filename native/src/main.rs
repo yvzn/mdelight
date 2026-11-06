@@ -3,6 +3,7 @@
 //! MDelight, native build: Win32 window, Scintilla editor, litehtml preview drawn with Direct2D.
 
 mod app;
+mod codehl;
 mod core;
 mod copy;
 mod crash;

@@ -75,6 +75,13 @@ pub const INDIC_ROUNDBOX: usize = 7;
 const IND_SEARCH: usize = 8;
 /// Indicator for clickable URLs (Ctrl+click opens them).
 const IND_URL: usize = 9;
+/// Indicator colouring fenced code (INDIC_TEXTFORE; each run's value carries its colour).
+const IND_CODE: usize = 10;
+const INDIC_TEXTFORE: isize = 17;
+const SCI_SETINDICATORVALUE: u32 = 2502;
+const SCI_INDICSETFLAGS: u32 = 2684;
+const SC_INDICFLAG_VALUEFORE: isize = 1;
+const SC_INDICVALUEBIT: usize = 0x0100_0000;
 const INDIC_PLAIN: isize = 0;
 
 /// Byte ranges of the http(s) URLs in `text`, without trailing punctuation.
@@ -369,6 +376,8 @@ impl Editor {
         self.msg(SCI_INDICSETUNDER, IND_SEARCH, 1);
         self.msg(SCI_INDICSETSTYLE, IND_URL, INDIC_PLAIN);
         self.msg(SCI_INDICSETFORE, IND_URL, cref(p.accent) as isize);
+        self.msg(SCI_INDICSETSTYLE, IND_CODE, INDIC_TEXTFORE);
+        self.msg(SCI_INDICSETFLAGS, IND_CODE, SC_INDICFLAG_VALUEFORE);
         self.msg(SCI_COLOURISE, 0, -1);
         self.mark_urls();
         self.update_margin();
@@ -380,6 +389,20 @@ impl Editor {
         self.msg(SCI_INDICATORCLEARRANGE, 0, self.msg(SCI_GETLENGTH, 0, 0));
         for (s, e) in url_ranges(&self.text()) {
             self.msg(SCI_INDICATORFILLRANGE, s, (e - s) as isize);
+        }
+    }
+
+    pub fn clear_code_colours(&self) {
+        self.msg(SCI_SETINDICATORCURRENT, IND_CODE, 0);
+        self.msg(SCI_INDICATORCLEARRANGE, 0, self.msg(SCI_GETLENGTH, 0, 0));
+    }
+
+    /// Colour runs (offset from `base`, length, 0xBBGGRR) of a fenced code block.
+    pub fn colour_runs(&self, base: usize, runs: &[(u32, u32, u32)]) {
+        self.msg(SCI_SETINDICATORCURRENT, IND_CODE, 0);
+        for &(off, len, bgr) in runs {
+            self.msg(SCI_SETINDICATORVALUE, bgr as usize | SC_INDICVALUEBIT, 0);
+            self.msg(SCI_INDICATORFILLRANGE, base + off as usize, len as isize);
         }
     }
 
